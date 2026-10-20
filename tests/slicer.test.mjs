@@ -77,9 +77,12 @@ test('in scene: relationship entries for absent people are cut, present and ment
     const { text, stats } = slice(RUE, 'present', { present: ['Leon', 'Jules'], scene: 'You hear Elliot laughing downstairs.' });
     assert.ok(text.includes('JULES VAUGHN (girlfriend)'));
     assert.ok(text.includes('LEON KENNEDY (cousin)'));
-    assert.ok(text.includes('ELLIOT'), 'mentioned in the scene');
-    assert.ok(!text.includes('LESLIE BENNETT'));
-    assert.ok(!text.includes('GIA BENNETT'));
+    assert.ok(text.includes('ELLIOT\n- Wants: someone to use with.\n- Hides: how scared she is of Laurie.'), 'mentioned in the scene: whole');
+    // Absent people keep what she wants from them, nothing else
+    assert.ok(text.includes('LESLIE BENNETT (mother)\n- Wants: to be trusted again.'));
+    assert.ok(!text.includes('polite, specific, full of detail when lying'));
+    assert.ok(text.includes('GIA BENNETT (sister)\n- Wants: Gia to be okay.'));
+    assert.ok(!text.includes('the bedroom floor'));
     const rel = stats.find(s => s.kind === 'relationships');
     assert.equal(rel.kept, 3);
     assert.deepEqual(rel.cutNames.sort(), ['Gia Bennett', 'Laurie', 'Leslie Bennett']);
@@ -87,8 +90,8 @@ test('in scene: relationship entries for absent people are cut, present and ment
 
 test('in scene: "your mom" brings in the entry headed (mother)', () => {
     const { text } = slice(RUE, 'present', { present: ['Leon'], scene: 'Is your mom home?' });
-    assert.ok(text.includes('LESLIE BENNETT (mother)'));
-    assert.ok(!text.includes('GIA BENNETT'));
+    assert.ok(text.includes('polite, specific, full of detail when lying'), 'Leslie whole');
+    assert.ok(!text.includes('teasing, big-sister'), 'Gia wants only');
 });
 
 test('in scene: matched lines are added back', () => {
@@ -98,25 +101,40 @@ test('in scene: matched lines are added back', () => {
     assert.ok(text.includes('Age 16: overdoses. Gia finds her.'));
 });
 
-test('off-screen: only the agreed sections, speech paragraph without samples', () => {
+const DRIVES = ['canon', 'identity', 'personality', 'knowledge', 'likes', 'fears', 'goals', 'secrets', 'coping', 'custom',
+    'limits', 'ordinary', 'social', 'inner', 'appearance', 'contradictions', 'boundaries'];
+
+test('off-screen: everything that drives them stays; history, habits, standing and sample lines go', () => {
     const { text, stats } = slice(RUE, 'offscreen', { present: ['Leon'] });
-    for (const kind of ['canon', 'identity', 'appearance', 'goals', 'secrets', 'knowledge', 'ordinary', 'inner']) {
-        for (const sec of sectionText(RUE, kind)) for (const line of sec.lines.filter(l => l.trim())) assert.ok(text.includes(line), `missing ${kind}`);
+    for (const kind of DRIVES) {
+        for (const sec of sectionText(RUE, kind)) {
+            assert.ok(text.includes(sec.heading), `missing heading ${sec.heading}`);
+            for (const line of sec.lines.filter(l => l.trim())) assert.ok(text.includes(line), `missing ${kind} line: ${line}`);
+        }
     }
     assert.ok(text.includes('Calm, dry, reasonable even when lying.'));
     assert.ok(!text.includes('(Teased)'), 'sample lines are not sent off-screen');
     const lines = new Set(text.split('\n').map(l => l.trim()));
-    for (const gone of ['PERSONALITY', 'HISTORY', 'WHAT SHE LIKES AND WANTS', 'LIMITS', 'SMALL HABITS', 'ADDICTION', 'COPING MECHANISMS', 'STANDING', 'SOCIAL WORLD', 'CONTRADICTIONS', 'BOUNDARIES']) {
-        assert.ok(!lines.has(gone), `${gone} should not be sent`);
-    }
-    assert.ok(!text.includes('Prefers pills'));
+    for (const gone of ['HISTORY', 'SMALL HABITS', 'STANDING']) assert.ok(!lines.has(gone), `${gone} should not be sent`);
     assert.ok(!text.includes('Pulls her sleeves'));
-    assert.ok(text.includes('LEON KENNEDY (cousin)'), 'entry for the player stays');
-    assert.ok(!text.includes('JULES VAUGHN'), 'Jules is not in the scene');
+    assert.ok(text.includes('LEON KENNEDY (cousin)\n- Wants: him to stop watching her.\n- Speech: flat'), 'player entry whole');
+    assert.ok(text.includes('JULES VAUGHN (girlfriend)\n- Wants: for Jules to stay.'), 'still knows what she wants from Jules');
+    assert.ok(!text.includes('the bikes, the train station'), 'but not the rest of that entry');
     const before = S.approxTokens(RUE);
     const after = S.approxTokens(text);
-    assert.ok(after < before * 0.6, `off-screen cut too small: ${before} -> ${after}`);
+    assert.ok(after < before * 0.8, `off-screen cut too small: ${before} -> ${after}`);
     assert.equal(stats.find(s => s.kind === 'speech').action, 'paragraph');
+});
+
+test('agenda level: full speech, newest and related history, no habits or standing', () => {
+    const { text } = slice(RUE, 'agenda', { present: ['Leon', 'Jules'] });
+    assert.ok(text.includes('(Teased) "Okay, wow. Rude."'), 'sample lines kept');
+    assert.ok(text.includes('Monday 15 October 2018: first sale at school.'), 'newest history');
+    assert.ok(text.includes('Season 1: meets Jules at the party.'), 'history about someone whose entry is kept');
+    assert.ok(!text.includes('Age 16: overdoses.'), 'older unrelated history cut');
+    assert.ok(!text.includes('Pulls her sleeves'));
+    assert.ok(!text.includes('nobody\'s group'));
+    for (const kind of DRIVES) for (const sec of sectionText(RUE, kind)) assert.ok(text.includes(sec.heading));
 });
 
 test('off-screen layout B keeps the title line and the speech paragraph', () => {
@@ -124,8 +142,25 @@ test('off-screen layout B keeps the title line and the speech paragraph', () => 
     assert.ok(text.startsWith('# SONIA PEREZ'));
     assert.ok(text.includes('Fast, sharp, Spanish-English mixed.'));
     assert.ok(!text.includes('Sample lines'));
-    assert.ok(text.includes('**Maddy** — Wants her to leave him.'));
-    assert.ok(!text.includes('**Nate**'));
+    assert.ok(text.includes('**Maddy** — Wants her to leave him.'), 'Maddy is here');
+    assert.ok(text.includes('*Shared:* Eight years of pageants.'), 'Maddy is here: whole');
+    assert.ok(text.includes('**Nate** — Wants him gone.'), 'Nate: the one-line entry stays');
+    assert.ok(!text.includes('ma\'am'), 'Nate: shared history cut');
+});
+
+test('agenda rows: owners and row text from the state block', () => {
+    const block = `<details>
+<summary>👤 NPC AGENDAS</summary>
+- <b>Jules Vaughn</b> | Agenda: go see Rue at the Bennett house | (Step 1/3) | Location: The Marlowe
+- <b>Nate</b> | Agenda: find out who Leon is | Location: his car
+</details>
+<details>
+<summary>📜 QUESTS</summary>
+- <b>Main</b> | Objective: settle in
+</details>`;
+    const rows = S.agendaRows(block);
+    assert.deepEqual(rows.map(r => r.owner), ['Jules Vaughn', 'Nate']);
+    assert.ok(rows[0].text.includes('go see Rue'));
 });
 
 // Ellis's layout from the first real report: an entry with no (relation) and no Wants/Hides lines
@@ -168,8 +203,10 @@ test('relationship entries after a non-person heading are still entries (Ellis)'
     assert.deepEqual(rel.persons.map(x => x.core), ['JULES VAUGHN', 'RUE BENNETT', 'LEON']);
     assert.ok(p.sections.some(s => s.kind === 'custom' && s.title === 'HIS WIFE AND CHILDREN'));
     const off = slice(ELLIS, 'offscreen', { present: ['Leon', 'Leon Kennedy', 'Dez'] });
-    assert.ok(off.text.includes('LEON\n- Doesn\'t know: him at all.'), 'the player entry is kept off-screen');
-    assert.ok(!off.text.includes('RUE BENNETT'));
+    assert.ok(off.text.includes('LEON\n- Doesn\'t know: him at all.\n- Speech: polite, sizing him up.'), 'the player entry is kept whole off-screen');
+    assert.ok(off.text.includes('RUE BENNETT\n- Knows of her from Jules.'), 'no Wants line: the first line stays');
+    assert.ok(off.text.includes('HIS WIFE AND CHILDREN'), 'own section kept off-screen');
+    assert.ok(off.text.includes('SEX AND KINK'));
     const on = slice(ELLIS, 'present', { present: ['Leon'], scene: 'He mentions his wife is out of town.' });
     assert.ok(on.text.includes('HIS WIFE AND CHILDREN'), 'own section kept whole in scene');
 });

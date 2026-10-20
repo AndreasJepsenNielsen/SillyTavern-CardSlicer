@@ -1,6 +1,7 @@
 {
     "name": "sillytavern-cardslicer",
     "private": true,
+    "type": "module",
     "description": "Tests for the Card Slicer SillyTavern extension. SillyTavern itself does not use this file.",
     "scripts": {
         "test": "node --test tests/slicer.test.mjs tests/index.test.mjs"

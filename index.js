@@ -5,7 +5,7 @@
 
 import {
     looksLikeCard, parseCard, planCard, sliceCard, nameVariants, titleCase, mentionsAny, relationMentioned,
-    cleanProse, stateBlock, speakerLabels, physicsText, sigWords, overlap, stringHash, approxTokens,
+    cleanProse, stateBlock, speakerLabels, physicsText, agendaRows, sigWords, overlap, stringHash, approxTokens,
 } from './slicer.js';
 
 const MODULE = 'cardSlicer';
@@ -118,13 +118,15 @@ function readScene(chat, lookBack) {
         replies.push(String(m.mes ?? ''));
     }
     const replyProse = replies.map(cleanProse);
-    const physics = replies.length ? physicsText(stateBlock(replies[0])) : '';
+    const block = replies.length ? stateBlock(replies[0]) : '';
+    const physics = physicsText(block);
     const labels = new Set([...speakerLabels(replyProse.join('\n'))].map(x => x.toLowerCase()));
     return {
         userText,
         sceneText: [userText, ...replyProse, physics].join('\n'),
         queryText: [userText, replyProse[0] || ''].join('\n').trim().slice(-3000),
         labels,
+        agenda: agendaRows(block),
     };
 }
 
@@ -284,6 +286,16 @@ async function processScan(args, activated, s) {
     }
     const byName = new Map();
     for (const r of registry) for (const n of r.names) byName.set(n.toLowerCase(), r);
+
+    // NPC Agendas: whose row it is, and who is named in someone else's row.
+    const rowsFor = (names) => {
+        const lc = new Set(names.map(n => n.toLowerCase()));
+        return scene.agenda.filter(row => nameVariants(row.owner).some(v => lc.has(v.toLowerCase())));
+    };
+    for (const r of registry) {
+        r.rows = rowsFor(r.names);
+        r.namedIn = scene.agenda.filter(row => !r.rows.includes(row) && mentionsAny(row.text, r.names));
+    }
     const knownNames = [...new Set([...registry.flatMap(r => r.names), ...player])];
     const excludeWords = new Set([...presentLc].flatMap(n => n.split(/\s+/)));
 
@@ -296,7 +308,7 @@ async function processScan(args, activated, s) {
         return [...set];
     };
 
-    const report = { mode: s.mode, matcher: 'not needed', present: [], cards: [] };
+    const report = { mode: s.mode, matcher: 'not needed', present: [], agenda: [], cards: [] };
     const work = [];
 
     for (const entry of activated.values()) {
@@ -305,6 +317,8 @@ async function processScan(args, activated, s) {
         if (!reg) {
             reg = { names: entryNames(entry, aliases) };
             reg.present = isPresent(reg.names);
+            reg.rows = rowsFor(reg.names);
+            reg.namedIn = scene.agenda.filter(row => !reg.rows.includes(row) && mentionsAny(row.text, reg.names));
         }
         const display = String(entry.comment || reg.names[0] || `Entry ${entry.uid}`);
         const namesLc = reg.names.map(n => n.toLowerCase());
@@ -319,24 +333,26 @@ async function processScan(args, activated, s) {
         const parsed = parseCard(entry.content, { knownNames });
         // A card whose name can't be found is never treated as off-screen.
         const unnamed = reg.names.length === 0;
-        const mode = reg.present || unnamed ? 'present' : 'offscreen';
+        const onAgenda = reg.rows.length > 0 || reg.namedIn.length > 0;
+        const mode = reg.present || unnamed ? 'present' : (onAgenda ? 'agenda' : 'offscreen');
         if (reg.present) report.present.push(display);
+        else if (onAgenda) report.agenda.push(display);
 
-        const mentionedPersons = [];
-        for (const sec of parsed.sections) {
-            for (const p of sec.persons) {
-                const names = personNames(p);
-                if (mentionsAny(scene.sceneText, names)) mentionedPersons.push(...names);
-            }
-        }
-        const lineNames = [...presentVariants, ...mentionedPersons];
         const autoPerson = (p) => {
             const names = personNames(p);
             if (names.some(n => presentLc.has(n.toLowerCase()))) return true; // the player, or someone in the scene
             if (mentionsAny(scene.sceneText, names)) return true; // named in the scene
+            if (reg.rows.some(row => mentionsAny(row.text, names))) return true; // their own agenda row names this person
+            const other = names.map(n => byName.get(n.toLowerCase())).find(Boolean);
+            if (other && other.rows.some(row => mentionsAny(row.text, reg.names))) return true; // that person's row names them
             // "mom" for a heading marked (mother), "wife" for HIS WIFE AND CHILDREN
             return relationMentioned(scene.queryText, `${p.paren} ${p.core}`);
         };
+        // History lines about anyone whose entry is kept whole (the player, the scene, their agenda) stay too.
+        const lineNames = [...presentVariants];
+        for (const sec of parsed.sections) {
+            for (const p of sec.persons) if (autoPerson(p)) lineNames.push(...personNames(p));
+        }
         const autoLine = (text) => mentionsAny(text, lineNames);
         const plan = planCard(parsed, { mode, autoPerson, autoLine, recentHistory: Number(s.recentHistory) || 0 });
         work.push({ entry, display, names: reg.names, unnamed, parsed, mode, plan, matched: null });
@@ -398,7 +414,7 @@ function summarize(card) {
         if (st.kind === 'relationships' && st.total) {
             if (st.kept < st.total) {
                 const cut = st.cutNames.slice(0, 6).join(', ') + (st.cutNames.length > 6 ? ', …' : '');
-                parts.push(`Relationships ${st.kept}/${st.total} (cut: ${cut})`);
+                parts.push(`Relationships ${st.kept} whole, ${st.total - st.kept} wants only (${cut})`);
             }
         } else if (st.action === 'trimmed') {
             parts.push(`${st.label} ${st.kept}/${st.total} lines`);
@@ -418,7 +434,7 @@ function renderReport(r) {
         el.html('<div class="card-slicer-muted">Nothing yet. Send a message and the cut for that turn shows here.</div>');
         return;
     }
-    const sliced = r.cards.filter(x => x.status === 'present' || x.status === 'offscreen');
+    const sliced = r.cards.filter(x => x.status === 'present' || x.status === 'agenda' || x.status === 'offscreen');
     const saved = sliced.reduce((a, x) => a + (x.safe ? x.before - x.after : 0), 0);
     const before = sliced.reduce((a, x) => a + x.before, 0);
     const head = [
@@ -426,12 +442,13 @@ function renderReport(r) {
             ? `<b>Cut</b>: about ${saved.toLocaleString()} of ${before.toLocaleString()} card tokens left out this turn.`
             : `<b>Report only</b>: nothing was cut. Cutting would have left out about ${saved.toLocaleString()} of ${before.toLocaleString()} card tokens.`,
         `In the scene: ${r.present.length ? escapeHtml(r.present.join(', ')) : 'no carded character'}`,
+        `Moving off-screen (NPC Agendas): ${r.agenda && r.agenda.length ? escapeHtml(r.agenda.join(', ')) : 'nobody'}`,
         `Matching: ${escapeHtml(r.matcher)}`,
     ];
     const rows = r.cards.map((x) => {
         if (x.status === 'player') return `<div class="card-slicer-card"><b>${escapeHtml(x.display)}</b> <span class="card-slicer-tag">your character</span> <span class="card-slicer-muted">sent whole</span></div>`;
         if (x.status === 'never') return `<div class="card-slicer-card"><b>${escapeHtml(x.display)}</b> <span class="card-slicer-tag">never slice</span> <span class="card-slicer-muted">sent whole</span></div>`;
-        const tag = x.status === 'present' ? 'in scene' : 'off-screen';
+        const tag = { present: 'in scene', agenda: 'off-screen, on agenda', offscreen: 'off-screen' }[x.status] || x.status;
         let warn = x.safe ? '' : '<div class="card-slicer-warn">Card not recognised cleanly, so it was sent whole.</div>';
         if (x.unnamed) warn += '<div class="card-slicer-warn">No name found for this card, so it is always treated as in the scene. Add it under Extra names.</div>';
         const matched = x.status === 'present' && x.matched ? ` · ${x.matched} matched to the scene` : '';

@@ -24,20 +24,33 @@ When it looks right, switch Mode to **Cut**.
 A character counts as **in the scene** when their name is in your last message, in the last two replies
 (not counting the state block), in a speaker label like `[Jules] (Tired):`, or in the state block's Physics row.
 
+A character is **on agenda** when they have a row in the state block's NPC Agendas, or are named in someone
+else's row (Jules's row says she's going to see Rue: both are on agenda).
+
+Nothing that drives a character is ever cut: Personality, Like and Want, Fear and Resent, Limits, Goals, Secrets,
+Knowledge, Inner Life, Coping and every section of the character's own (SEX AND KINK, FAITH AND USING) are always
+sent. What changes by level:
+
 **In the scene**: the whole card, except
 
-- **History**: the three newest lines, every line naming you or someone in the scene, every line naming
-  someone mentioned in the scene, and up to four more lines that match the scene.
-- **Relationships**: the entries for you, for everyone in the scene, for anyone mentioned (a heading marked
-  `(mother)` also counts when someone says "mom"), and matched entries.
+- **History**: the three newest lines, every line naming someone whose entry is sent whole, and up to four
+  more lines that match the scene.
 - **Ordinary Day and Social World**: only matched lines.
 
-Personality, Speech and Voice with every sample line, Like and Want, Fear and Resent, Limits, Small Habits,
-Knowledge, Standing, Inner Life and every other section are always sent whole.
+**On agenda** (off-screen, but the preset is moving them): the whole card, with Speech and Voice and every
+sample line, except Small Habits, Standing, and History beyond the newest lines and lines about people
+whose entry is sent whole.
 
-**Off-screen** (the card was picked, but the character isn't in the scene): Canon Point, Identity, Appearance,
-Goals, Secrets, Knowledge, Ordinary Day, Inner Life, the opening paragraph of Speech and Voice (no sample lines),
-and the relationship entries for you and for whoever is in the scene.
+**Off-screen**: the whole card except History, Small Habits, Standing and the sample lines (the opening
+paragraph of Speech and Voice stays).
+
+**Relationship entries**, at every level:
+
+- **Whole** for you, for everyone in the scene, for anyone mentioned (a heading marked `(mother)` or
+  `HIS WIFE AND CHILDREN` also counts when someone says "mom" or "wife"), for anyone named in their own agenda
+  row, for anyone whose agenda row names them, and for entries matched to the scene.
+- **Wants and Now lines only** for everyone else, so they still know who they want something from. An entry
+  with no Wants or Now line keeps its first line.
 
 Always sent whole:
 

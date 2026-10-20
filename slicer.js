@@ -35,11 +35,29 @@ export const SECTION_LABELS = {
     custom: 'Other section',
 };
 
-/** Sections an off-screen character keeps whole. Speech keeps only its opening paragraph. */
-const OFFSCREEN_KEEP = new Set(['canon', 'identity', 'appearance', 'goals', 'secrets', 'knowledge', 'ordinary', 'inner']);
+/**
+ * Three levels:
+ * - present: in the scene. Everything, with History, Ordinary Day and Social World matched to the scene.
+ * - agenda: off-screen but being moved (a row in NPC Agendas, or named in someone's row). Everything except
+ *   older History, Small Habits and Standing.
+ * - offscreen: everything that drives what they do, without History, Small Habits, Standing or sample lines.
+ * In every level, relationship entries for people outside the scene keep their Wants and Now lines.
+ */
+const DROPPED = {
+    present: new Set(),
+    agenda: new Set(['habits', 'standing']),
+    offscreen: new Set(['history', 'habits', 'standing']),
+};
 
-/** Sections an in-scene character keeps only in part (the rest is matched against the scene). */
-const PRESENT_LINE_FILTERED = new Set(['history', 'ordinary', 'social']);
+/** Sections whose lines are chosen one by one, per level. */
+const LINE_FILTERED = {
+    present: new Set(['history', 'ordinary', 'social']),
+    agenda: new Set(['history']),
+    offscreen: new Set(),
+};
+
+/** Lines of a relationship entry kept for someone outside the scene: what they want from them and where things stand. */
+const DRIVE_LINE_RE = /^\s*(?:[-*•]\s*)?\**\s*(?:Wants|Now)\b/i;
 
 /** Field labels that start the lines of a relationship entry. */
 const FIELD_RE = /^\s*(?:[-*•]\s*)?\**\s*(?:Wants|Hides|Speech|Shared(?:\s+history)?|Now|Doesn['’]?t know|Does not know|Once (?:she|he|they) (?:learns?|knows?)|As it grows|Memories|Knows)\b/i;
@@ -55,7 +73,10 @@ const SMALL_WORDS = new Set(['and', 'of', 'the', 'de', 'van', 'von', 'da', 'la',
 
 const RELATION_WORDS = {
     mother: ['mom', 'mother', 'mum', 'mama', 'mommy'],
+    mom: ['mom', 'mother', 'mum', 'mama', 'mommy'],
+    mum: ['mom', 'mother', 'mum', 'mama', 'mommy'],
     father: ['dad', 'father', 'papa', 'daddy'],
+    dad: ['dad', 'father', 'papa', 'daddy'],
     stepmother: ['stepmom', 'stepmother'],
     stepfather: ['stepdad', 'stepfather'],
     sister: ['sister'],
@@ -149,7 +170,7 @@ function boldPersonHeader(line) {
     const m = String(line).match(/^\s*\*\*([A-Z][^*\n]{0,58}?)\*\*\s*(?:\(([^)]*)\))?\s*(?:[—–:-]\s*(.*))?$/);
     if (!m) return null;
     if (classifyHeading(m[1])) return null;
-    return { core: m[1].trim(), paren: (m[2] || '').trim() };
+    return { core: m[1].trim(), paren: (m[2] || '').trim(), rest: (m[3] || '').trim() };
 }
 
 function plainPersonHeader(line) {
@@ -267,7 +288,7 @@ export function parseCard(text, { knownNames = [] } = {}) {
     };
 
     const startPerson = (info, line, sure) => {
-        person = { header: line, core: info.core, paren: info.paren, lines: [], sure };
+        person = { header: line, core: info.core, paren: info.paren, inline: !!info.rest, lines: [], sure };
         cur.persons.push(person);
     };
 
@@ -364,14 +385,16 @@ export function speechParagraph(lines) {
 
 /**
  * Decides which parts are kept for sure and which are candidates for matching against the scene.
+ * Only the present level matches against the scene; the other levels keep by rule alone.
  * @param {ReturnType<typeof parseCard>} parsed
- * @param {{mode: 'present'|'offscreen', autoPerson: (p: object) => boolean, autoLine: (text: string) => boolean, recentHistory?: number}} opts
+ * @param {{mode: 'present'|'agenda'|'offscreen', autoPerson: (p: object) => boolean, autoLine: (text: string) => boolean, recentHistory?: number}} opts
  * @returns {{keep: Set<string>, candidates: {id: string, kind: string, text: string}[], matchable: {id: string, kind: string, text: string}[]}}
  */
 export function planCard(parsed, { mode, autoPerson, autoLine, recentHistory = 3 }) {
     const keep = new Set();
     const candidates = [];
     const matchable = [];
+    const filtered = LINE_FILTERED[mode] || new Set();
 
     parsed.sections.forEach((sec, si) => {
         if (sec.kind === 'relationships') {
@@ -384,7 +407,7 @@ export function planCard(parsed, { mode, autoPerson, autoLine, recentHistory = 3
             });
             return;
         }
-        if (mode !== 'present' || !PRESENT_LINE_FILTERED.has(sec.kind)) return;
+        if (!filtered.has(sec.kind)) return;
 
         const itemIdx = [];
         sec.lines.forEach((l, li) => { if (l.trim()) itemIdx.push(li); });
@@ -394,11 +417,20 @@ export function planCard(parsed, { mode, autoPerson, autoLine, recentHistory = 3
             const text = sec.lines[li].trim();
             matchable.push({ id, kind: sec.kind, text });
             if (recent.has(li) || autoLine(text)) keep.add(id);
-            else candidates.push({ id, kind: sec.kind, text });
+            else if (mode === 'present') candidates.push({ id, kind: sec.kind, text });
         }
     });
 
     return { keep, candidates, matchable };
+}
+
+/** A relationship entry cut down to what the character wants from the person and where things stand. */
+export function driveLines(person) {
+    const kept = person.lines.filter(l => DRIVE_LINE_RE.test(l));
+    if (kept.length) return kept;
+    if (person.inline) return []; // "**Maddy** — Wants her to leave him. ..." already says it on the heading line
+    const first = person.lines.find(l => l.trim());
+    return first ? [first] : [];
 }
 
 function trimBlankEdges(lines) {
@@ -412,14 +444,16 @@ function trimBlankEdges(lines) {
 /**
  * Builds the sliced card.
  * @param {ReturnType<typeof parseCard>} parsed
- * @param {'present'|'offscreen'} mode
- * @param {Set<string>} keep ids of relationship entries and filtered lines to keep
+ * @param {'present'|'agenda'|'offscreen'} mode
+ * @param {Set<string>} keep ids of relationship entries kept whole and of filtered lines to keep
  */
 export function sliceCard(parsed, mode, keep) {
     const out = [];
     const stats = [];
     const pre = trimBlankEdges(parsed.preamble);
     if (pre.length) out.push(...pre, '');
+    const dropped = DROPPED[mode] || DROPPED.offscreen;
+    const filtered = LINE_FILTERED[mode] || new Set();
 
     parsed.sections.forEach((sec, si) => {
         const label = sec.kind === 'custom' ? sec.title : (SECTION_LABELS[sec.kind] || sec.title);
@@ -431,21 +465,22 @@ export function sliceCard(parsed, mode, keep) {
             body.push(...intro);
             stat.total = sec.persons.length;
             sec.persons.forEach((p, pi) => {
+                if (body.length && body[body.length - 1].trim()) body.push('');
                 if (keep.has(`s${si}:p${pi}`)) {
-                    if (body.length && body[body.length - 1].trim()) body.push('');
                     body.push(p.header, ...trimBlankEdges(p.lines));
                     stat.kept++;
                 } else {
+                    body.push(p.header, ...driveLines(p));
                     stat.cutNames.push(titleCase(p.core));
                 }
             });
-            stat.action = stat.kept === stat.total ? 'kept' : (stat.kept || intro.length ? 'trimmed' : 'dropped');
+            stat.action = stat.kept === stat.total ? 'kept' : 'trimmed';
+        } else if (dropped.has(sec.kind)) {
+            stat.action = 'dropped';
         } else if (mode === 'offscreen' && sec.kind === 'speech') {
             body = speechParagraph(sec.lines);
             stat.action = 'paragraph';
-        } else if (mode === 'offscreen' && !OFFSCREEN_KEEP.has(sec.kind)) {
-            stat.action = 'dropped';
-        } else if (mode === 'present' && PRESENT_LINE_FILTERED.has(sec.kind)) {
+        } else if (filtered.has(sec.kind)) {
             sec.lines.forEach((l, li) => {
                 if (!l.trim()) return;
                 stat.total++;
@@ -493,6 +528,37 @@ export function speakerLabels(text) {
     const out = new Set();
     for (const m of String(text ?? '').matchAll(/\[([^\]\n]{1,40})\]\s*\(/g)) out.add(m[1].trim());
     return out;
+}
+
+/**
+ * Rows of the NPC Agendas tracker: who the preset is moving off-screen, and the row text (agenda, location,
+ * who they're with). The owner is the bold name at the start, e.g. `- <b>Jules</b> | Agenda: ...`.
+ * @returns {{owner: string, text: string}[]}
+ */
+export function agendaRows(block) {
+    const rows = [];
+    let inSection = false;
+    for (const line of String(block ?? '').split(/\r?\n/)) {
+        if (/NPC\s+AGENDAS?/i.test(line)) {
+            inSection = true;
+            continue;
+        }
+        if (inSection && (/<\/details>/i.test(line) || /<summary>/i.test(line)) && !/<b>|\*\*/.test(line)) {
+            inSection = false;
+            continue;
+        }
+        const isRow = (inSection && /^\s*[-*•]/.test(line)) || /\bAgenda\s*:/i.test(line);
+        if (!isRow) continue;
+        const bold = line.match(/<b>([^<]{1,60})<\/b>/i) || line.match(/\*\*([^*]{1,60})\*\*/);
+        let owner = bold ? bold[1] : '';
+        if (!owner) {
+            const m = line.replace(/^\s*[-*•]\s*/, '').match(/^([^|:]{1,60})[|:]/);
+            owner = m ? m[1] : '';
+        }
+        owner = owner.replace(/<[^>]+>/g, '').trim();
+        if (owner) rows.push({ owner, text: line.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() });
+    }
+    return rows;
 }
 
 /** The Physics row of the state block, which says who is where in the scene. */
