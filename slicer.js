@@ -59,6 +59,13 @@ const LINE_FILTERED = {
     offscreen: new Set(['history']),
 };
 
+/**
+ * Sections for intimate scenes only (SEX AND KINK, TURN-ONS). The card template keeps everything from them that
+ * shows in everyday life under Like and Want or Fear and Resent, so they are only sent while the character is in
+ * the scene. SEXUALITY is not matched: it can hold who they are attracted to.
+ */
+const INTIMATE_SECTION_RE = /\b(?:SEX|KINKS?|EROTIC|NSFW|FETISH(?:ES)?|TURN-?ONS?|INTIMACY|INTIMATE|BEDROOM)\b/;
+
 /** A sample line labelled for texts or calls, kept first among an off-screen character's voice lines. */
 const TEXT_LABEL_RE = /\b(?:text(?:s|ing|ed)?|phone|call(?:s|ing)?|message(?:s|d)?|DMs?|voicemail)\b/i;
 
@@ -521,7 +528,7 @@ export function sliceCard(parsed, mode, keep, { voiceLines = 3, playerNames = []
                 }
             });
             stat.action = stat.kept === stat.total ? 'kept' : 'trimmed';
-        } else if (dropped.has(sec.kind)) {
+        } else if (dropped.has(sec.kind) || (mode !== 'present' && sec.kind === 'custom' && INTIMATE_SECTION_RE.test(sec.title))) {
             stat.action = 'dropped';
         } else if (mode === 'offscreen' && sec.kind === 'speech') {
             const a = speechAnchors(sec.lines, voiceLines, playerNames);

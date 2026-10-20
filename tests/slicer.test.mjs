@@ -222,9 +222,21 @@ test('relationship entries after a non-person heading are still entries (Ellis)'
     assert.ok(off.text.includes('LEON\n- Doesn\'t know: him at all.\n- Speech: polite, sizing him up.'), 'the player entry is kept whole off-screen');
     assert.ok(off.text.includes('RUE BENNETT\n- Knows of her from Jules.'), 'no Wants line: the first line stays');
     assert.ok(off.text.includes('HIS WIFE AND CHILDREN'), 'own section kept off-screen');
-    assert.ok(off.text.includes('SEX AND KINK'));
+    assert.ok(!off.text.includes('SEX AND KINK'), 'intimate section only in scene');
+    assert.ok(!slice(ELLIS, 'active', { present: ['Leon'] }).text.includes('Likes being called sir'), 'not for active either');
     const on = slice(ELLIS, 'present', { present: ['Leon'], scene: 'He mentions his wife is out of town.' });
     assert.ok(on.text.includes('HIS WIFE AND CHILDREN'), 'own section kept whole in scene');
+    assert.ok(on.text.includes('SEX AND KINK\nLikes being called sir.'), 'intimate section in scene');
+});
+
+test('intimate-section headings', () => {
+    const card = (h) => `IDENTITY\nX.\nSPEECH AND VOICE\nFlat.\nPERSONALITY\nCold.\n${h}\nSecret line.`;
+    for (const h of ['SEX AND KINK', 'KINKS', 'TURN-ONS', 'INTIMACY', 'BEDROOM']) {
+        assert.ok(!S.sliceCard(S.parseCard(card(h)), 'offscreen', new Set()).text.includes('Secret line.'), h);
+    }
+    for (const h of ['SEXUALITY', 'FAITH AND USING', 'THE GROUP CHAT']) {
+        assert.ok(S.sliceCard(S.parseCard(card(h)), 'offscreen', new Set()).text.includes('Secret line.'), h);
+    }
 });
 
 test('names from keys: no possessives, no lowercase first words, no pronouns', () => {
