@@ -14,7 +14,7 @@ const LOG = '[Card Slicer]';
 const DEFAULTS = Object.freeze({
     enabled: true,
     mode: 'report', // 'report': work out the cut and show it, change nothing. 'cut': send the sliced cards.
-    lookBack: 2, // earlier replies read to decide who is in the scene
+    lookBack: 1, // earlier replies read to decide who is in the scene (the Physics row covers people who stay silent)
     recentHistory: 3, // newest HISTORY lines always kept
     useVectors: true, // match lines to the scene with Vector Storage's embedder
     topK: 4, // matched lines and entries added per card
@@ -266,7 +266,7 @@ async function processScan(args, activated, s) {
     const never = new Set(parseList(s.neverSlice).map(x => x.toLowerCase()));
     const player = nameVariants(c.name1 || '');
     const playerLc = new Set(player.map(x => x.toLowerCase()));
-    const scene = readScene(c.chat, Number(s.lookBack) || 2);
+    const scene = readScene(c.chat, Number(s.lookBack) || 1);
 
     // Every card in the active lorebooks, so relationship headings and the scene can be read against all of them.
     const pool = Array.isArray(args.sortedEntries) && args.sortedEntries.length ? args.sortedEntries : [...activated.values()];
@@ -391,19 +391,22 @@ async function processScan(args, activated, s) {
         const keep = new Set([...w.plan.keep, ...(w.matched || [])]);
         const { text, stats } = sliceCard(w.parsed, w.mode, keep, { voiceLines: Number(s.voiceLines) || 0, playerNames: player });
         const before = approxTokens(w.entry.content);
-        const after = approxTokens(text);
         const speech = w.parsed.sections.find(x => x.kind === 'speech');
-        const safe = !!text && (!speech || text.includes(speech.heading.trim())) && after <= before;
-        w.result = { text, stats, before, after, safe };
+        const safe = !!text && (!speech || text.includes(speech.heading.trim()));
+        // Nothing to cut (a small card): send the original as it is, no warning.
+        const unchanged = safe && approxTokens(text) >= before;
+        const finalText = unchanged ? w.entry.content : text;
+        const after = safe ? approxTokens(finalText) : before;
+        w.result = { text: finalText, stats, before, after, safe, unchanged };
         report.cards.push({
-            display: w.display, status: w.mode, before, after, safe, stats, text,
+            display: w.display, status: w.mode, before, after, safe, unchanged, stats, text: w.result.text,
             names: w.names, unnamed: w.unnamed, routine: w.routine,
             matched: w.matched ? w.matched.size : 0,
         });
     }
 
     if (s.mode === 'cut') {
-        for (const w of work) if (w.result.safe) w.entry.content = w.result.text;
+        for (const w of work) if (w.result.safe && !w.result.unchanged) w.entry.content = w.result.text;
     }
 
     if (!runtime.dryRun && runtime.genType !== 'quiet') {
@@ -415,6 +418,7 @@ async function processScan(args, activated, s) {
 // ---------------------------------------------------------------- report
 
 function summarize(card) {
+    if (card.unchanged) return 'Nothing to cut, sent as it is';
     const parts = [];
     for (const st of card.stats || []) {
         if (st.kind === 'relationships' && st.total) {
@@ -515,7 +519,7 @@ function bindSettings() {
     const s = settings();
     $('#cs_enabled').prop('checked', !!s.enabled).on('change', function () { s.enabled = !!this.checked; save(); });
     $('#cs_mode').val(s.mode).on('change', function () { s.mode = this.value === 'cut' ? 'cut' : 'report'; save(); });
-    $('#cs_lookback').val(s.lookBack).on('input', function () { s.lookBack = Math.min(6, Math.max(1, parseInt(this.value, 10) || 2)); save(); });
+    $('#cs_lookback').val(s.lookBack).on('input', function () { s.lookBack = Math.min(6, Math.max(1, parseInt(this.value, 10) || 1)); save(); });
     $('#cs_recent').val(s.recentHistory).on('input', function () { s.recentHistory = Math.min(20, Math.max(0, parseInt(this.value, 10) || 0)); save(); });
     $('#cs_topk').val(s.topK).on('input', function () { s.topK = Math.min(20, Math.max(0, parseInt(this.value, 10) || 0)); save(); });
     $('#cs_voice').val(s.voiceLines).on('input', function () { s.voiceLines = Math.min(20, Math.max(0, parseInt(this.value, 10) || 0)); save(); });

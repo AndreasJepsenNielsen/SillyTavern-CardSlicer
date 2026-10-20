@@ -317,3 +317,28 @@ test('sliced texts parse back cleanly (no broken sections)', async () => {
         assert.ok(!/\n{3,}/.test(t));
     }
 });
+
+test('a small card with nothing to cut is sent as it is, without a warning', async () => {
+    setSettings({ useVectors: false, mode: 'cut' });
+    const VIV = `IDENTITY
+Vivian, Jules's friend.
+PERSONALITY
+Warm.
+SPEECH AND VOICE
+Fast and bright.
+(Happy) "Babe!"
+RELATIONSHIPS
+JULES VAUGHN (friend)
+- Wants: Jules happy.
+LEON (new neighbour)
+- Wants: to meet him.`;
+    context.chat = [{ is_user: false, mes: '`[Vivian] (Excited):` "Babe!" Jules laughs.' }, { is_user: true, mes: 'I wave at Vivian.' }];
+    const e = { uid: 7, world: 'W', comment: 'Vivian', key: ['Vivian', 'Viv'], content: VIV, disable: false };
+    const j = { uid: 8, world: 'W', comment: 'Jules Vaughn', key: ['Jules'], content: JULES, disable: false };
+    const args = { state: { next: 0 }, activated: { entries: new Map([['W.7', e], ['W.8', j]]) }, sortedEntries: [e, j] };
+    for (const f of listeners.worldinfo_scan_done) await f(args);
+    assert.equal(e.content, VIV);
+    const html = elements.get('#card_slicer_report')._html;
+    assert.ok(html.includes('Nothing to cut, sent as it is'));
+    assert.ok(!html.includes('not recognised cleanly'));
+});

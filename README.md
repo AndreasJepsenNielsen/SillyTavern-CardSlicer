@@ -21,7 +21,7 @@ When it looks right, switch Mode to **Cut**.
 
 ## What it sends
 
-A character counts as **in the scene** when their name is in your last message, in the last two replies
+A character counts as **in the scene** when their name is in your last message, in the latest reply
 (not counting the state block), in a speaker label like `[Jules] (Tired):`, or in the state block's Physics row.
 
 A character off-screen is **active** when their row in the state block's NPC Agendas involves you, someone in
@@ -74,7 +74,7 @@ If the embedder can't be reached, it falls back to matching shared words and say
 | Setting | Default | What it does |
 |---|---|---|
 | Mode | Report only | Report only shows the cut. Cut sends it. |
-| Replies read for who's here | 2 | Earlier replies read to decide who is in the scene. |
+| Replies read for who's here | 1 | Earlier replies read to decide who is in the scene. The Physics row of the latest state block also counts. |
 | Newest history lines always kept | 3 | Recent events are the setup for the story. |
 | Matches added per card | 4 | Extra history lines and relationship entries added when they match the scene. |
 | Voice lines kept off-screen | 3 | Sample lines a routine or idle off-screen character keeps. |
