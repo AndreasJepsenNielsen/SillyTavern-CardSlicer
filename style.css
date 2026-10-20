@@ -1,0 +1,63 @@
+.card-slicer .card-slicer-grid {
+    display: grid;
+    grid-template-columns: 1fr 5em;
+    gap: 4px 8px;
+    align-items: center;
+    margin: 6px 0;
+}
+
+.card-slicer .card-slicer-grid input {
+    margin: 0;
+}
+
+.card-slicer textarea {
+    resize: vertical;
+}
+
+.card-slicer .card-slicer-head {
+    margin: 6px 0 8px;
+    line-height: 1.5;
+}
+
+.card-slicer .card-slicer-card {
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 6px;
+    padding: 6px 8px;
+    margin: 6px 0;
+}
+
+.card-slicer .card-slicer-tag {
+    font-size: 0.8em;
+    padding: 0 6px;
+    border-radius: 8px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    opacity: 0.85;
+}
+
+.card-slicer .card-slicer-muted {
+    opacity: 0.7;
+    font-size: 0.9em;
+}
+
+.card-slicer .card-slicer-warn {
+    color: var(--warning, #e0a030);
+    font-size: 0.9em;
+    margin: 4px 0;
+}
+
+.card-slicer details summary {
+    cursor: pointer;
+    font-size: 0.9em;
+    margin-top: 4px;
+}
+
+.card-slicer .card-slicer-pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 320px;
+    overflow-y: auto;
+    font-size: 0.85em;
+    padding: 6px;
+    border-radius: 4px;
+    background: var(--black30a, rgba(0, 0, 0, 0.3));
+}

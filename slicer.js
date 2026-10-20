@@ -1,0 +1,512 @@
+// Card Slicer: parsing and slicing logic.
+// Nothing in this file touches SillyTavern, so it can be tested on its own.
+
+/** Section kinds, matched against an all-caps heading. Order matters. */
+const SECTION_RULES = [
+    ['relationships', /^RELATIONSHIPS?\b|\bRELATIONSHIPS?$/],
+    ['canon', /\bCANON\s+POINT\b/],
+    ['identity', /\bIDENTITY\b/],
+    ['speech', /\bSPEECH\b|\bVOICE\b/],
+    ['personality', /\bPERSONALITY\b/],
+    ['history', /\bHISTORY\b/],
+    ['knowledge', /\bKNOWLEDGE\b/],
+    ['likes', /\bLIKES?\b[\s\S]*\bWANTS?\b|\bWANTS?\b[\s\S]*\bLIKES?\b/],
+    ['fears', /\bFEARS?\b|\bRESENTS?\b/],
+    ['goals', /\bGOALS?\b/],
+    ['secrets', /\bSECRETS?\b/],
+    ['coping', /\bCOPING\b/],
+    ['limits', /\bLIMITS?\b/],
+    ['habits', /\bHABITS?\b|\bMANNERISMS?\b/],
+    ['standing', /\bSTANDING\b/],
+    ['ordinary', /\bORDINARY\s+DAY\b/],
+    ['social', /\bSOCIAL\s+WORLD\b/],
+    ['inner', /\bINNER\s+LIFE\b/],
+    ['appearance', /\bAPPEARANCE\b/],
+    ['contradictions', /\bCONTRADICTIONS?\b/],
+    ['boundaries', /\bBOUNDAR(?:Y|IES)\b/],
+];
+
+export const SECTION_LABELS = {
+    relationships: 'Relationships', canon: 'Canon point', identity: 'Identity', speech: 'Speech and voice',
+    personality: 'Personality', history: 'History', knowledge: 'Knowledge', likes: 'Like and want',
+    fears: 'Fear and resent', goals: 'Goals', secrets: 'Secrets', coping: 'Coping', limits: 'Limits',
+    habits: 'Small habits', standing: 'Standing', ordinary: 'Ordinary day', social: 'Social world',
+    inner: 'Inner life', appearance: 'Appearance', contradictions: 'Contradictions', boundaries: 'Boundaries',
+    custom: 'Other section',
+};
+
+/** Sections an off-screen character keeps whole. Speech keeps only its opening paragraph. */
+const OFFSCREEN_KEEP = new Set(['canon', 'identity', 'appearance', 'goals', 'secrets', 'knowledge', 'ordinary', 'inner']);
+
+/** Sections an in-scene character keeps only in part (the rest is matched against the scene). */
+const PRESENT_LINE_FILTERED = new Set(['history', 'ordinary', 'social']);
+
+/** Field labels that start the lines of a relationship entry. */
+const FIELD_RE = /^\s*(?:[-*•]\s*)?\**\s*(?:Wants|Hides|Speech|Shared(?:\s+history)?|Now|Doesn['’]?t know|Does not know|Once (?:she|he|they) (?:learns?|knows?)|As it grows|Memories|Knows)\b/i;
+
+/** Start of a sample line inside SPEECH AND VOICE. */
+const SAMPLE_START = /^(?:[-*•]\s*)?(?:\**\s*(?:Sample lines|sample lines|Samples)\b|\(|["“”]|To [A-Z][^:]{0,40}:)/;
+
+const NAME_STOP = new Set(['the', 'a', 'an', 'and', 'of', 'mr', 'mrs', 'ms', 'dr', 'card', 'lead', 'minor', 'supporting',
+    'char', 'character', 'npc', 'entry', 'location', 'setting', 'scenario', 'narrator']);
+
+const RELATION_WORDS = {
+    mother: ['mom', 'mother', 'mum', 'mama', 'mommy'],
+    father: ['dad', 'father', 'papa', 'daddy'],
+    stepmother: ['stepmom', 'stepmother'],
+    stepfather: ['stepdad', 'stepfather'],
+    sister: ['sister'],
+    brother: ['brother'],
+    grandmother: ['grandma', 'grandmother', 'nana', 'granny'],
+    grandfather: ['grandpa', 'grandfather'],
+    aunt: ['aunt', 'auntie'],
+    uncle: ['uncle'],
+    cousin: ['cousin'],
+    son: ['son'],
+    daughter: ['daughter'],
+    wife: ['wife'],
+    husband: ['husband'],
+    boyfriend: ['boyfriend'],
+    girlfriend: ['girlfriend'],
+    boss: ['boss'],
+    employer: ['boss', 'employer'],
+    sponsor: ['sponsor'],
+    landlord: ['landlord'],
+    landlady: ['landlady'],
+    teacher: ['teacher'],
+    coach: ['coach'],
+    therapist: ['therapist'],
+    roommate: ['roommate'],
+    neighbor: ['neighbor', 'neighbour'],
+    neighbour: ['neighbor', 'neighbour'],
+};
+
+const STOP_WORDS = new Set(('about above after again against almost alone along already although always among another anyone anything '
+    + 'around because before behind being below between cannot could couldn doesn didn during either enough every everyone everything '
+    + 'first from further getting given going gonna great having here herself himself however inside into itself just knows later least '
+    + 'little looks makes maybe might myself never nothing often other others ourselves perhaps quite rather really right said same says '
+    + 'seems should since someone something still sure takes than that their theirs them themselves then there these they thing things '
+    + 'think this those though through together toward under until upon very wants were what whatever when where whether which while '
+    + 'whole whose will with within without would your yours yourself yeah okay really kind sort another again thing looking turns '
+    + 'turned voice back down eyes hand hands head face looks looked says said tells told asks asked away still around close').split(/\s+/));
+
+// ---------------------------------------------------------------- headings
+
+function splitOutsideParens(s) {
+    let depth = 0;
+    for (let i = 0; i < s.length; i++) {
+        const ch = s[i];
+        if (ch === '(') depth++;
+        else if (ch === ')') depth = Math.max(0, depth - 1);
+        else if (depth === 0) {
+            if (ch === ':') return [s.slice(0, i), s.slice(i + 1)];
+            if ((ch === '—' || ch === '–' || ch === '-') && s[i - 1] === ' ' && s[i + 1] === ' ') return [s.slice(0, i - 1), s.slice(i + 2)];
+        }
+    }
+    return [s, ''];
+}
+
+/**
+ * Reads a line as an all-caps heading.
+ * @returns {{core: string, paren: string, rest: string} | null}
+ */
+export function headingInfo(line) {
+    let s = String(line ?? '').trim();
+    if (!s || s.length > 120) return null;
+    if (/^[-*•>]\s/.test(s)) return null; // bullets are never headings
+    s = s.replace(/^#{1,6}\s+/, '');
+    s = s.replace(/^\[([^\]]+)\]:?$/, '$1');
+    s = s.replace(/^[*_]{1,3}/, '').replace(/[*_]{1,3}:?$/, '');
+    const [headRaw, rest] = splitOutsideParens(s);
+    const head = headRaw.replace(/[*_]+/g, '').trim();
+    const pm = head.match(/^(.*?)\s*\((.*)\)\s*$/);
+    const core = (pm ? pm[1] : head).trim();
+    const paren = pm ? pm[2].trim() : '';
+    if (!core || core.length > 60) return null;
+    if (!/^[A-Z0-9][A-Z0-9 '’&/.,\-–—]*$/.test(core)) return null;
+    if (/[.!?]$/.test(core)) return null; // a shouted line, not a heading
+    if (core.replace(/[^A-Z]/g, '').length < 2) return null;
+    return { core, paren, rest: rest.trim() };
+}
+
+export function classifyHeading(core) {
+    const c = String(core).toUpperCase();
+    for (const [kind, re] of SECTION_RULES) {
+        if (re.test(c)) return kind;
+    }
+    return null;
+}
+
+function boldPersonHeader(line) {
+    if (FIELD_RE.test(line)) return null;
+    const m = String(line).match(/^\s*\*\*([A-Z][^*\n]{0,58}?)\*\*\s*(?:\(([^)]*)\))?\s*(?:[—–:-]\s*(.*))?$/);
+    if (!m) return null;
+    if (classifyHeading(m[1])) return null;
+    return { core: m[1].trim(), paren: (m[2] || '').trim() };
+}
+
+function plainPersonHeader(line) {
+    if (FIELD_RE.test(line)) return null;
+    const m = String(line).trim().match(/^([A-Z][\w'’.\-]*(?:\s+[A-Z][\w'’.\-]*){0,3})\s*(?:\(([^)]*)\))?\s*:?$/);
+    if (!m) return null;
+    return { core: m[1].trim(), paren: (m[2] || '').trim() };
+}
+
+function nextContentLine(lines, i) {
+    for (let j = i + 1; j < lines.length && j <= i + 3; j++) {
+        if (lines[j].trim()) return lines[j];
+    }
+    return '';
+}
+
+/** Quick check: does this text look like a character card? */
+export function looksLikeCard(text) {
+    const kinds = new Set();
+    for (const line of String(text ?? '').split(/\r?\n/)) {
+        const h = headingInfo(line);
+        if (!h) continue;
+        const k = classifyHeading(h.core);
+        if (k) kinds.add(k);
+    }
+    return kinds.size >= 3 && kinds.has('speech');
+}
+
+// ---------------------------------------------------------------- names
+
+export function titleCase(s) {
+    return String(s).toLowerCase().replace(/(^|[\s\-'’])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
+}
+
+/** Name forms to look for in the chat: the full name and the first name, as written and in Title Case. */
+export function nameVariants(raw) {
+    const base = String(raw ?? '').replace(/\[[^\]]*\]|\([^)]*\)/g, ' ').replace(/[*_#"“”]/g, '').trim();
+    const first = base.split(/\s+[—–|-]\s+|:/)[0].replace(/\s+/g, ' ').trim();
+    if (!first) return [];
+    const words = first.split(' ').filter(Boolean);
+    if (words.length > 4) return [];
+    const forms = new Set();
+    const add = (x) => {
+        const t = String(x).trim();
+        if (t.length >= 2 && !NAME_STOP.has(t.toLowerCase())) forms.add(t);
+    };
+    add(first);
+    if (first === first.toUpperCase()) add(titleCase(first));
+    if (words.length > 1) {
+        add(words[0]);
+        if (words[0] === words[0].toUpperCase()) add(titleCase(words[0]));
+    }
+    return [...forms];
+}
+
+const reCache = new Map();
+function escapeRe(s) {
+    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Case-sensitive whole-word check. "Rue" matches "Rue's" and "Rue," but not "Ruel". */
+export function mentionsAny(text, variants) {
+    const t = String(text ?? '');
+    for (const v of variants || []) {
+        if (!v) continue;
+        let re = reCache.get(v);
+        if (!re) {
+            re = new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe(v)}(?![\\p{Ll}\\p{N}])`, 'u');
+            reCache.set(v, re);
+        }
+        if (re.test(t)) return true;
+    }
+    return false;
+}
+
+/** For a relationship heading like "LESLIE BENNETT (mother)": does the scene mention "mom"? */
+export function relationMentioned(text, paren) {
+    const p = String(paren ?? '').toLowerCase();
+    if (!p) return false;
+    const words = new Set();
+    for (const [key, list] of Object.entries(RELATION_WORDS)) {
+        if (new RegExp(`\\b${key}\\b`).test(p)) list.forEach(w => words.add(w));
+    }
+    if (!words.size) return false;
+    const re = new RegExp(`\\b(?:${[...words].map(escapeRe).join('|')})s?\\b`, 'i');
+    return re.test(String(text ?? ''));
+}
+
+// ---------------------------------------------------------------- parsing
+
+/**
+ * Parses a card into a preamble and sections. Relationship sections are split into one entry per person.
+ * @param {string} text
+ * @param {{knownNames?: string[]}} opts names of every card and the player, used to spot relationship headings
+ */
+export function parseCard(text, { knownNames = [] } = {}) {
+    const lines = String(text ?? '').split(/\r?\n/);
+    const known = new Set(knownNames.map(n => String(n).toLowerCase()));
+    const out = { preamble: [], sections: [] };
+    let cur = null;
+    let person = null;
+
+    const isKnown = (core) => {
+        const lc = core.toLowerCase();
+        if (known.has(lc)) return true;
+        const firstWord = lc.split(/\s+/)[0];
+        return known.has(firstWord);
+    };
+
+    const startPerson = (info, line) => {
+        person = { header: line, core: info.core, paren: info.paren, lines: [] };
+        cur.persons.push(person);
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const h = headingInfo(line);
+        if (h) {
+            const kind = classifyHeading(h.core);
+            if (kind) {
+                cur = { kind, heading: line, title: h.core, lines: [], intro: [], persons: [] };
+                out.sections.push(cur);
+                person = null;
+                continue;
+            }
+            if (cur && cur.kind === 'relationships') {
+                const looksPerson = !!h.paren || isKnown(h.core) || FIELD_RE.test(nextContentLine(lines, i));
+                if (looksPerson) {
+                    startPerson(h, line);
+                    continue;
+                }
+            }
+            if (!cur) {
+                out.preamble.push(line);
+                continue;
+            }
+            // A section of the character's own (ADDICTION, VIOLENCE): an all-caps line on its own.
+            if (!h.rest && h.core.replace(/[^A-Z]/g, '').length >= 4) {
+                cur = { kind: 'custom', heading: line, title: h.core, lines: [], intro: [], persons: [] };
+                out.sections.push(cur);
+                person = null;
+                continue;
+            }
+        }
+
+        if (cur && cur.kind === 'relationships') {
+            const b = boldPersonHeader(line);
+            if (b) {
+                startPerson(b, line);
+                continue;
+            }
+            const p = plainPersonHeader(line);
+            if (p && (FIELD_RE.test(nextContentLine(lines, i)) || (isKnown(p.core) && /:\s*$|\)\s*$/.test(line.trim())))) {
+                startPerson(p, line);
+                continue;
+            }
+            if (person) person.lines.push(line);
+            else cur.intro.push(line);
+            continue;
+        }
+
+        if (cur) cur.lines.push(line);
+        else out.preamble.push(line);
+    }
+
+    for (const s of out.sections) {
+        for (const p of s.persons) p.names = nameVariants(p.core);
+    }
+    return out;
+}
+
+/** The opening paragraph of SPEECH AND VOICE, without the sample lines. */
+export function speechParagraph(lines) {
+    const out = [];
+    for (const l of lines) {
+        const t = l.trim();
+        if (!t) {
+            if (out.length) break;
+            continue;
+        }
+        if (SAMPLE_START.test(t)) break;
+        out.push(l);
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------- planning and slicing
+
+/**
+ * Decides which parts are kept for sure and which are candidates for matching against the scene.
+ * @param {ReturnType<typeof parseCard>} parsed
+ * @param {{mode: 'present'|'offscreen', autoPerson: (p: object) => boolean, autoLine: (text: string) => boolean, recentHistory?: number}} opts
+ * @returns {{keep: Set<string>, candidates: {id: string, kind: string, text: string}[], matchable: {id: string, kind: string, text: string}[]}}
+ */
+export function planCard(parsed, { mode, autoPerson, autoLine, recentHistory = 3 }) {
+    const keep = new Set();
+    const candidates = [];
+    const matchable = [];
+
+    parsed.sections.forEach((sec, si) => {
+        if (sec.kind === 'relationships') {
+            sec.persons.forEach((p, pi) => {
+                const id = `s${si}:p${pi}`;
+                const text = [p.header, ...p.lines].join('\n').trim().slice(0, 1500);
+                matchable.push({ id, kind: 'relationships', text });
+                if (autoPerson(p)) keep.add(id);
+                else if (mode === 'present') candidates.push({ id, kind: 'relationships', text });
+            });
+            return;
+        }
+        if (mode !== 'present' || !PRESENT_LINE_FILTERED.has(sec.kind)) return;
+
+        const itemIdx = [];
+        sec.lines.forEach((l, li) => { if (l.trim()) itemIdx.push(li); });
+        const recent = sec.kind === 'history' ? new Set(itemIdx.slice(-Math.max(0, recentHistory))) : new Set();
+        for (const li of itemIdx) {
+            const id = `s${si}:l${li}`;
+            const text = sec.lines[li].trim();
+            matchable.push({ id, kind: sec.kind, text });
+            if (recent.has(li) || autoLine(text)) keep.add(id);
+            else candidates.push({ id, kind: sec.kind, text });
+        }
+    });
+
+    return { keep, candidates, matchable };
+}
+
+function trimBlankEdges(lines) {
+    let a = 0;
+    let b = lines.length;
+    while (a < b && !lines[a].trim()) a++;
+    while (b > a && !lines[b - 1].trim()) b--;
+    return lines.slice(a, b);
+}
+
+/**
+ * Builds the sliced card.
+ * @param {ReturnType<typeof parseCard>} parsed
+ * @param {'present'|'offscreen'} mode
+ * @param {Set<string>} keep ids of relationship entries and filtered lines to keep
+ */
+export function sliceCard(parsed, mode, keep) {
+    const out = [];
+    const stats = [];
+    const pre = trimBlankEdges(parsed.preamble);
+    if (pre.length) out.push(...pre, '');
+
+    parsed.sections.forEach((sec, si) => {
+        const label = sec.kind === 'custom' ? sec.title : (SECTION_LABELS[sec.kind] || sec.title);
+        let body = [];
+        const stat = { kind: sec.kind, label, action: 'kept', total: 0, kept: 0, cutNames: [] };
+
+        if (sec.kind === 'relationships') {
+            const intro = trimBlankEdges(sec.intro);
+            body.push(...intro);
+            stat.total = sec.persons.length;
+            sec.persons.forEach((p, pi) => {
+                if (keep.has(`s${si}:p${pi}`)) {
+                    if (body.length && body[body.length - 1].trim()) body.push('');
+                    body.push(p.header, ...trimBlankEdges(p.lines));
+                    stat.kept++;
+                } else {
+                    stat.cutNames.push(titleCase(p.core));
+                }
+            });
+            stat.action = stat.kept === stat.total ? 'kept' : (stat.kept || intro.length ? 'trimmed' : 'dropped');
+        } else if (mode === 'offscreen' && sec.kind === 'speech') {
+            body = speechParagraph(sec.lines);
+            stat.action = 'paragraph';
+        } else if (mode === 'offscreen' && !OFFSCREEN_KEEP.has(sec.kind)) {
+            stat.action = 'dropped';
+        } else if (mode === 'present' && PRESENT_LINE_FILTERED.has(sec.kind)) {
+            sec.lines.forEach((l, li) => {
+                if (!l.trim()) return;
+                stat.total++;
+                if (keep.has(`s${si}:l${li}`)) {
+                    body.push(l);
+                    stat.kept++;
+                }
+            });
+            stat.action = stat.kept === stat.total ? 'kept' : (stat.kept ? 'trimmed' : 'dropped');
+        } else {
+            body = trimBlankEdges(sec.lines);
+        }
+
+        body = trimBlankEdges(body);
+        const headingHasText = !!(headingInfo(sec.heading)?.rest);
+        if (body.length || (headingHasText && stat.action !== 'dropped')) {
+            out.push(sec.heading, ...body, '');
+        } else if (stat.action !== 'dropped') {
+            stat.action = 'dropped';
+        }
+        stats.push(stat);
+    });
+
+    const text = out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    return { text, stats };
+}
+
+// ---------------------------------------------------------------- chat text
+
+export function cleanProse(mes) {
+    return String(mes ?? '')
+        .replace(/<!--\s*GFX_START\s*-->[\s\S]*?<!--\s*GFX_END\s*-->/gi, ' ')
+        .replace(/<internal_states>[\s\S]*?<\/internal_states>/gi, ' ')
+        .replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, ' ');
+}
+
+export function stateBlock(mes) {
+    const s = String(mes ?? '');
+    const m = s.match(/<internal_states>([\s\S]*?)<\/internal_states>/i) || s.match(/<!--\s*GFX_START\s*-->([\s\S]*?)<!--\s*GFX_END\s*-->/i);
+    return m ? m[1] : '';
+}
+
+/** Names from speaker labels like `[Jules] (Tired, Guarded):` */
+export function speakerLabels(text) {
+    const out = new Set();
+    for (const m of String(text ?? '').matchAll(/\[([^\]\n]{1,40})\]\s*\(/g)) out.add(m[1].trim());
+    return out;
+}
+
+/** The Physics row of the state block, which says who is where in the scene. */
+export function physicsText(block) {
+    return String(block ?? '').split(/\r?\n/).filter(l => /\bPhysics\s*:/i.test(l)).join('\n');
+}
+
+// ---------------------------------------------------------------- keyword fallback
+
+function stem(w) {
+    return w.length > 6 ? w.replace(/(?:ings?|edly|ed|es|s)$/, '') : w;
+}
+
+export function sigWords(text, exclude = new Set()) {
+    const out = new Set();
+    for (const raw of String(text ?? '').toLowerCase().match(/\p{L}[\p{L}'’]{3,}/gu) || []) {
+        const w = raw.replace(/['’]s$/, '');
+        if (w.length < 5 || STOP_WORDS.has(w) || exclude.has(w)) continue;
+        out.add(stem(w));
+    }
+    return out;
+}
+
+export function overlap(a, b) {
+    let n = 0;
+    for (const x of a) if (b.has(x)) n++;
+    return n;
+}
+
+// ---------------------------------------------------------------- misc
+
+/** Same algorithm as SillyTavern's getStringHash (cyrb53). */
+export function stringHash(str, seed = 0) {
+    let h1 = 0xdeadbeef ^ seed;
+    let h2 = 0x41c6ce57 ^ seed;
+    for (let i = 0, ch; i < str.length; i++) {
+        ch = str.charCodeAt(i);
+        h1 = Math.imul(h1 ^ ch, 2654435761);
+        h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
+
+export function approxTokens(text) {
+    return Math.round(String(text ?? '').length / 3.8);
+}
