@@ -5,7 +5,7 @@
 
 import {
     looksLikeCard, parseCard, planCard, sliceCard, nameVariants, titleCase, mentionsAny, relationMentioned,
-    cleanProse, stateBlock, speakerLabels, physicsText, agendaRows, sigWords, overlap, stringHash, approxTokens,
+    cleanProse, stateBlock, speakerLabels, physicsText, agendaRows, sigWords, overlap, stringHash, approxTokens, plainHeading,
 } from './slicer.js';
 
 const MODULE = 'cardSlicer';
@@ -359,7 +359,8 @@ async function processScan(args, activated, s) {
         for (const sec of parsed.sections) {
             for (const p of sec.persons) if (autoPerson(p)) lineNames.push(...personNames(p));
         }
-        const autoLine = (text) => mentionsAny(text, lineNames);
+        // Off-screen with a routine row or none: History keeps only its newest lines and lines with the player.
+        const autoLine = mode === 'offscreen' ? (text) => mentionsAny(text, player) : (text) => mentionsAny(text, lineNames);
         const plan = planCard(parsed, { mode, autoPerson, autoLine, recentHistory: Number(s.recentHistory) || 0 });
         work.push({ entry, display, names: reg.names, unnamed, routine, parsed, mode, plan, matched: null });
     }
@@ -392,7 +393,7 @@ async function processScan(args, activated, s) {
         const { text, stats } = sliceCard(w.parsed, w.mode, keep, { voiceLines: Number(s.voiceLines) || 0, playerNames: player });
         const before = approxTokens(w.entry.content);
         const speech = w.parsed.sections.find(x => x.kind === 'speech');
-        const safe = !!text && (!speech || text.includes(speech.heading.trim()));
+        const safe = !!text && (!speech || text.includes(plainHeading(speech.heading)));
         // Nothing to cut (a small card): send the original as it is, no warning.
         const unchanged = safe && approxTokens(text) >= before;
         const finalText = unchanged ? w.entry.content : text;

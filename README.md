@@ -42,7 +42,8 @@ entry is sent whole.
 not SEXUALITY) are only sent while the character is in the scene. The card template keeps everything from them
 that shows in everyday life under Like and Want or Fear and Resent.
 
-**Off-screen, routine or no row**: History the same way as active, Speech and Voice keeps its description and
+**Off-screen, routine or no row**: History keeps only its newest lines and lines with you (lines about other
+people come back once the character is in the scene or active), Speech and Voice keeps its description and
 three sample lines (lines labelled for texts or calls first, then lines to you, then the first ones), and
 Small Habits and Standing are left out.
 
@@ -63,6 +64,9 @@ Always sent whole:
 
 If a card doesn't come out cleanly (for example, the Speech and Voice heading went missing), it is sent whole and
 the panel says so.
+
+**Formatting**: at every level, blank lines inside sections and markdown on headings (`**`, `#`, `*Shared:*`)
+are left out. The words are unchanged, and sample lines are never touched.
 
 ## Matching
 

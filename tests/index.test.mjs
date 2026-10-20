@@ -176,6 +176,8 @@ test('keyword path: Jules in scene is trimmed, Rue on a routine row is off-scree
     assert.ok(!rue.includes('Pulls her sleeves'), 'habits cut');
     assert.ok(!rue.includes('Age 16: overdoses.'), 'older history cut');
     assert.ok(rue.includes('Monday 15 October 2018: first sale at school.'), 'newest history kept');
+    assert.ok(rue.includes('Age 5–13: grows up next door to Leon.'), 'history with Leon kept');
+    assert.ok(!rue.includes('Season 1: meets Jules at the party.'), 'routine: history about Jules waits until Rue is involved');
     assert.ok(rue.includes('JULES VAUGHN (girlfriend)\n- Wants: for Jules to stay.\n- Hides: the using.'), 'Jules is in the scene: whole');
     // Untouched
     assert.equal(out.Scenario, SCENARIO);

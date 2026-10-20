@@ -136,6 +136,12 @@ test('off-screen: drives stay; newest and Leon history; 3 voice lines; no habits
     assert.ok(!text.includes('the bikes, the train station'), 'but not the rest of that entry');
 });
 
+test('formatting: no blank lines inside sections, sample lines untouched', () => {
+    const card = `**IDENTITY**\n\n20. Painter.\n\n**SPEECH AND VOICE**\nSoft.\n\n(Tired) *rubs her eyes* "Fine."\n\n**PERSONALITY**\nQuiet.`;
+    const { text } = S.sliceCard(S.parseCard(card), 'present', new Set());
+    assert.equal(text, 'IDENTITY\n20. Painter.\n\nSPEECH AND VOICE\nSoft.\n(Tired) *rubs her eyes* "Fine."\n\nPERSONALITY\nQuiet.');
+});
+
 test('voice lines: texting lines come first', () => {
     const lines = ['Short and flat.', '(Teased) "No."', '(Angry) "Get out."', '(Texting) "u up"', '(Warm) "Hey."'];
     const a = S.speechAnchors(lines, 2, ['Leon']);
@@ -155,12 +161,14 @@ test('active level: the whole card except older history', () => {
 
 test('off-screen layout B keeps the title line and the speech paragraph', () => {
     const { text } = slice(SONIA, 'offscreen', { present: ['Leon', 'Maddy'] });
-    assert.ok(text.startsWith('# SONIA PEREZ'));
+    assert.ok(text.startsWith('SONIA PEREZ — Minor'), 'title line without markdown');
+    assert.ok(text.includes('\nSPEECH AND VOICE\n'), 'heading without **');
+    assert.ok(!text.includes('**'));
     assert.ok(text.includes('Fast, sharp, Spanish-English mixed.'));
     assert.ok(text.includes('To Maddy, warm: "Ay, look at you. Come here."'), 'only two samples, both stay');
-    assert.ok(text.includes('**Maddy** — Wants her to leave him.'), 'Maddy is here');
-    assert.ok(text.includes('*Shared:* Eight years of pageants.'), 'Maddy is here: whole');
-    assert.ok(text.includes('**Nate** — Wants him gone.'), 'Nate: the one-line entry stays');
+    assert.ok(text.includes('Maddy — Wants her to leave him.'), 'Maddy is here');
+    assert.ok(text.includes('Shared: Eight years of pageants.'), 'Maddy is here: whole');
+    assert.ok(text.includes('Nate — Wants him gone.'), 'Nate: the one-line entry stays');
     assert.ok(!text.includes('ma\'am'), 'Nate: shared history cut');
 });
 

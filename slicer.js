@@ -485,6 +485,23 @@ export function driveLines(person) {
     return first ? [first] : [];
 }
 
+/**
+ * A heading line without its markdown: "**SPEECH AND VOICE**" → "SPEECH AND VOICE",
+ * "# SONIA PEREZ — *Minor*" → "SONIA PEREZ — Minor", "**Maddy** — Wants ..." → "Maddy — Wants ...".
+ */
+export function plainHeading(line) {
+    return String(line ?? '')
+        .replace(/^\s*#{1,6}\s+/, '')
+        .replace(/\*\*|__/g, '')
+        .replace(/(^|\s)\*([^*\n]+)\*(?=\s|$|[:.,;—–-])/g, '$1$2')
+        .trim();
+}
+
+/** "*Shared:* Eight years" → "Shared: Eight years". Only the label; the rest of the line is left as written. */
+function plainFieldLabel(line) {
+    return String(line).replace(/^(\s*(?:[-•]\s*)?)\*{1,2}([^*\n]{1,30}:)\*{1,2}/, '$1$2');
+}
+
 function trimBlankEdges(lines) {
     let a = 0;
     let b = lines.length;
@@ -504,7 +521,9 @@ export function sliceCard(parsed, mode, keep, { voiceLines = 3, playerNames = []
     const out = [];
     const stats = [];
     const pre = trimBlankEdges(parsed.preamble);
-    if (pre.length) out.push(...pre, '');
+    if (pre.length) {
+        out.push(...pre.filter(l => l.trim()).map(l => (/^\s*#{1,6}\s/.test(l) || headingInfo(l) ? plainHeading(l) : l)), '');
+    }
     const dropped = DROPPED[mode] || DROPPED.offscreen;
     const filtered = LINE_FILTERED[mode] || new Set();
 
@@ -518,12 +537,11 @@ export function sliceCard(parsed, mode, keep, { voiceLines = 3, playerNames = []
             body.push(...intro);
             stat.total = sec.persons.length;
             sec.persons.forEach((p, pi) => {
-                if (body.length && body[body.length - 1].trim()) body.push('');
                 if (keep.has(`s${si}:p${pi}`)) {
-                    body.push(p.header, ...trimBlankEdges(p.lines));
+                    body.push(plainHeading(p.header), ...trimBlankEdges(p.lines).map(plainFieldLabel));
                     stat.kept++;
                 } else {
-                    body.push(p.header, ...driveLines(p));
+                    body.push(plainHeading(p.header), ...driveLines(p).map(plainFieldLabel));
                     stat.cutNames.push(titleCase(p.core));
                 }
             });
@@ -550,10 +568,11 @@ export function sliceCard(parsed, mode, keep, { voiceLines = 3, playerNames = []
             body = trimBlankEdges(sec.lines);
         }
 
-        body = trimBlankEdges(body);
+        // Blank lines inside a section carry nothing for the model; the headings already separate everything.
+        body = body.filter(l => l.trim());
         const headingHasText = !!(headingInfo(sec.heading)?.rest);
         if (body.length || (headingHasText && stat.action !== 'dropped')) {
-            out.push(sec.heading, ...body, '');
+            out.push(plainHeading(sec.heading), ...body, '');
         } else if (stat.action !== 'dropped') {
             stat.action = 'dropped';
         }
