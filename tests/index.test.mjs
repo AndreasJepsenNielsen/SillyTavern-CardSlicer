@@ -156,42 +156,49 @@ function setSettings(extra) {
     context.extensionSettings.cardSlicer = { enabled: true, mode: 'cut', lookBack: 2, recentHistory: 3, useVectors: true, topK: 4, threshold: 0.4, neverSlice: '', aliases: '', ...extra };
 }
 
-test('keyword path: Jules in scene is trimmed, Rue (agenda row) gets the middle level, others untouched', async () => {
+test('keyword path: Jules in scene is trimmed, Rue on a routine row is off-screen, others untouched', async () => {
     setSettings({ useVectors: false });
     const out = await runScan();
     // Jules: everything protected kept, history trimmed, absent people keep their Wants line
     assert.ok(out['Jules Vaughn'].includes('(Cornered) "Can you just — not. Please."'));
     assert.ok(out['Jules Vaughn'].includes('LIMITS'));
+    assert.ok(out['Jules Vaughn'].includes('ORDINARY DAY'), 'ordinary day always sent');
     assert.ok(out['Jules Vaughn'].includes('Sunday 14 October 2024: buys new canvases.'));
     assert.ok(!out['Jules Vaughn'].includes('Age 17: moves to East Highland'), 'old unrelated line cut');
     assert.ok(out['Jules Vaughn'].includes('LEON (new neighbour)\n- Doesn\'t know: him at all.\n- Speech: polite'));
     assert.ok(out['Jules Vaughn'].includes('ELLIS (sugar daddy)\n- Wants: his money, not his company.'));
     assert.ok(!out['Jules Vaughn'].includes('sweet, performed'));
-    // Rue is only in the state block, but she has an agenda row: middle level
-    assert.ok(out['Rue Bennett'].includes('(Teased)'), 'sample lines kept on agenda');
-    assert.ok(!out['Rue Bennett'].includes('Pulls her sleeves'), 'habits cut');
-    assert.ok(!out['Rue Bennett'].includes('Age 16: overdoses.'), 'older history cut');
-    assert.ok(out['Rue Bennett'].includes('JULES VAUGHN (girlfriend)\n- Wants: for Jules to stay.\n- Hides: the using.'), 'Jules is in the scene: whole');
+    // Rue's row ("get home") names nobody: routine, so the off-screen level with voice lines
+    const rue = out['Rue Bennett'];
+    assert.ok(rue.includes('(To Leon, ordinary)'), 'voice line to Leon');
+    assert.ok(rue.includes('(Teased)'));
+    assert.ok(!rue.includes('(Warm)'), 'other sample lines cut');
+    assert.ok(!rue.includes('Pulls her sleeves'), 'habits cut');
+    assert.ok(!rue.includes('Age 16: overdoses.'), 'older history cut');
+    assert.ok(rue.includes('Monday 15 October 2018: first sale at school.'), 'newest history kept');
+    assert.ok(rue.includes('JULES VAUGHN (girlfriend)\n- Wants: for Jules to stay.\n- Hides: the using.'), 'Jules is in the scene: whole');
     // Untouched
     assert.equal(out.Scenario, SCENARIO);
     assert.equal(out['Leon Kennedy'], LEON_CARD);
     assert.equal(fetchLog.length, 0, 'no network calls with embeddings off');
     const report = elements.get('#card_slicer_report')._html;
     assert.ok(report.includes('In the scene: Jules Vaughn'));
-    assert.ok(report.includes('Moving off-screen (NPC Agendas): Rue Bennett'));
+    assert.ok(report.includes('Active off-screen: nobody'));
+    assert.ok(report.includes('off-screen, routine'));
 });
 
-test('no agenda row: Rue keeps what drives her, loses history, habits and sample lines', async () => {
+test('no agenda row: Rue keeps what drives her and a few voice lines', async () => {
     setSettings({ useVectors: false });
     const out = await runScan({ reply: REPLY_NO_AGENDA });
     const rue = out['Rue Bennett'];
-    assert.ok(!rue.includes('(Teased)'));
-    for (const keep of ['PERSONALITY', 'WHAT SHE LIKES AND WANTS', 'WHAT SHE FEARS AND RESENTS', 'LIMITS', 'ADDICTION', 'Prefers pills', 'GOALS', 'INNER LIFE']) {
+    assert.ok(!rue.includes('(Lying)'));
+    for (const keep of ['PERSONALITY', 'WHAT SHE LIKES AND WANTS', 'WHAT SHE FEARS AND RESENTS', 'LIMITS', 'ADDICTION', 'Prefers pills', 'GOALS', 'INNER LIFE', 'SOCIAL WORLD', 'ORDINARY DAY']) {
         assert.ok(rue.includes(keep), `${keep} kept`);
     }
-    assert.ok(!rue.split('\n').includes('HISTORY'));
+    assert.ok(rue.includes('Age 5–13: grows up next door to Leon.'), 'history with Leon');
     assert.ok(rue.includes('GIA BENNETT (sister)\n- Wants: Gia to be okay.'));
     assert.ok(!rue.includes('teasing, big-sister'));
+    assert.ok(!elements.get('#card_slicer_report')._html.includes('off-screen, routine'));
 });
 
 test('agenda pairs: Jules goes to see Rue, both get the middle level and each other\'s entries whole', async () => {
@@ -199,7 +206,7 @@ test('agenda pairs: Jules goes to see Rue, both get the middle level and each ot
     const out = await runScan({ reply: REPLY_ALONE, user: 'I make coffee.' });
     const report = elements.get('#card_slicer_report')._html;
     assert.ok(report.includes('In the scene: no carded character'));
-    assert.ok(report.includes('Jules Vaughn, Rue Bennett') || report.includes('Rue Bennett, Jules Vaughn'));
+    assert.ok(report.includes('Active off-screen: Jules Vaughn, Rue Bennett') || report.includes('Active off-screen: Rue Bennett, Jules Vaughn'));
     assert.ok(out['Jules Vaughn'].includes('RUE BENNETT (ex)\n- Wants: nothing from her now.\n- Speech: clipped.'), 'her row names Rue');
     assert.ok(out['Rue Bennett'].includes('JULES VAUGHN (girlfriend)\n- Wants: for Jules to stay.\n- Hides: the using.\n- Speech: quieter'), 'Jules\'s row names Rue');
     assert.ok(out['Rue Bennett'].includes('GIA BENNETT (sister)\n- Wants: Gia to be okay.'));
@@ -281,7 +288,7 @@ test('embedding failure falls back to keywords and still slices', async () => {
     context.extensionSettings.vectors = { source: 'ollama', ollama_model: 'other-model', use_alt_endpoint: true, alt_endpoint_url: 'http://10.0.0.9:11434' };
     fetchImpl = async () => ({ ok: false, status: 500, text: async () => 'boom' });
     const out = await runScan({ reply: REPLY_NO_AGENDA });
-    assert.ok(!out['Rue Bennett'].includes('(Teased)'));
+    assert.ok(!out['Rue Bennett'].includes('(Warm)'));
     assert.ok(elements.get('#card_slicer_report')._html.includes('keywords (embedding request failed'));
 });
 

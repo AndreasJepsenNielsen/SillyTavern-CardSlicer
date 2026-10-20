@@ -36,14 +36,14 @@ test('parses layout B (bold headings, bold relationship names)', () => {
     assert.ok(p.preamble.join('\n').includes('SONIA PEREZ'));
 });
 
-function slice(card, mode, { present = [], scene = '', recentHistory = 3, extraKeep = [] } = {}) {
+function slice(card, mode, { present = [], scene = '', recentHistory = 3, extraKeep = [], playerNames = ['Leon', 'Leon Kennedy'] } = {}) {
     const parsed = S.parseCard(card, { knownNames: KNOWN });
     const presentLc = new Set(present.map(x => x.toLowerCase()));
     const autoPerson = (p) => p.names.some(n => presentLc.has(n.toLowerCase())) || S.mentionsAny(scene, p.names) || S.relationMentioned(scene, p.paren);
     const autoLine = (t) => S.mentionsAny(t, present);
     const plan = S.planCard(parsed, { mode, autoPerson, autoLine, recentHistory });
     const keep = new Set([...plan.keep, ...extraKeep]);
-    return { ...S.sliceCard(parsed, mode, keep), plan, parsed };
+    return { ...S.sliceCard(parsed, mode, keep, { voiceLines: 3, playerNames }), plan, parsed };
 }
 
 const PROTECTED = ['canon', 'identity', 'personality', 'speech', 'knowledge', 'likes', 'fears', 'goals', 'secrets', 'coping',
@@ -104,44 +104,60 @@ test('in scene: matched lines are added back', () => {
 const DRIVES = ['canon', 'identity', 'personality', 'knowledge', 'likes', 'fears', 'goals', 'secrets', 'coping', 'custom',
     'limits', 'ordinary', 'social', 'inner', 'appearance', 'contradictions', 'boundaries'];
 
-test('off-screen: everything that drives them stays; history, habits, standing and sample lines go', () => {
-    const { text, stats } = slice(RUE, 'offscreen', { present: ['Leon'] });
+test('off-screen: drives stay; newest and Leon history; 3 voice lines; no habits or standing', () => {
+    const { text, stats } = slice(RUE, 'offscreen', { present: ['Leon', 'Leon Kennedy'], playerNames: ['Leon', 'Leon Kennedy'] });
     for (const kind of DRIVES) {
         for (const sec of sectionText(RUE, kind)) {
             assert.ok(text.includes(sec.heading), `missing heading ${sec.heading}`);
             for (const line of sec.lines.filter(l => l.trim())) assert.ok(text.includes(line), `missing ${kind} line: ${line}`);
         }
     }
+    // History: where her life stands now, and what she shares with Leon
+    assert.ok(text.includes('Monday 15 October 2018: first sale at school.'));
+    assert.ok(text.includes('Age 5–13: grows up next door to Leon.'));
+    assert.ok(!text.includes('Age 16: overdoses.'));
+    // Voice: the description, the line to Leon, then the first lines in order
     assert.ok(text.includes('Calm, dry, reasonable even when lying.'));
-    assert.ok(!text.includes('(Teased)'), 'sample lines are not sent off-screen');
-    const lines = new Set(text.split('\n').map(l => l.trim()));
-    for (const gone of ['HISTORY', 'SMALL HABITS', 'STANDING']) assert.ok(!lines.has(gone), `${gone} should not be sent`);
+    assert.ok(text.includes('(To Leon, ordinary) "You\'re up early."'));
+    assert.ok(text.includes('(Teased) "Okay, wow. Rude."'));
+    assert.ok(text.includes('(Cornered)'));
+    assert.ok(!text.includes('(Lying)'));
+    assert.ok(!text.includes('(Warm)'));
+    const sp = stats.find(s => s.kind === 'speech');
+    assert.equal(sp.action, 'voice');
+    assert.equal(sp.kept, 3);
+    assert.equal(sp.total, 5);
+    // Scene-only sections
     assert.ok(!text.includes('Pulls her sleeves'));
+    assert.ok(!text.includes('nobody\'s group'));
+    // Relationships
     assert.ok(text.includes('LEON KENNEDY (cousin)\n- Wants: him to stop watching her.\n- Speech: flat'), 'player entry whole');
     assert.ok(text.includes('JULES VAUGHN (girlfriend)\n- Wants: for Jules to stay.'), 'still knows what she wants from Jules');
     assert.ok(!text.includes('the bikes, the train station'), 'but not the rest of that entry');
-    const before = S.approxTokens(RUE);
-    const after = S.approxTokens(text);
-    assert.ok(after < before * 0.8, `off-screen cut too small: ${before} -> ${after}`);
-    assert.equal(stats.find(s => s.kind === 'speech').action, 'paragraph');
 });
 
-test('agenda level: full speech, newest and related history, no habits or standing', () => {
-    const { text } = slice(RUE, 'agenda', { present: ['Leon', 'Jules'] });
-    assert.ok(text.includes('(Teased) "Okay, wow. Rude."'), 'sample lines kept');
+test('voice lines: texting lines come first', () => {
+    const lines = ['Short and flat.', '(Teased) "No."', '(Angry) "Get out."', '(Texting) "u up"', '(Warm) "Hey."'];
+    const a = S.speechAnchors(lines, 2, ['Leon']);
+    assert.deepEqual(a.lines, ['Short and flat.', '(Teased) "No."', '(Texting) "u up"']);
+});
+
+test('active level: the whole card except older history', () => {
+    const { text } = slice(RUE, 'active', { present: ['Leon', 'Jules'] });
+    assert.ok(text.includes('(Teased) "Okay, wow. Rude."'), 'every sample line');
+    assert.ok(text.includes('(Warm) "Come here. No, closer."'));
     assert.ok(text.includes('Monday 15 October 2018: first sale at school.'), 'newest history');
     assert.ok(text.includes('Season 1: meets Jules at the party.'), 'history about someone whose entry is kept');
     assert.ok(!text.includes('Age 16: overdoses.'), 'older unrelated history cut');
-    assert.ok(!text.includes('Pulls her sleeves'));
-    assert.ok(!text.includes('nobody\'s group'));
-    for (const kind of DRIVES) for (const sec of sectionText(RUE, kind)) assert.ok(text.includes(sec.heading));
+    assert.ok(text.includes('Pulls her sleeves'), 'habits kept');
+    assert.ok(text.includes('nobody\'s group'), 'standing kept');
 });
 
 test('off-screen layout B keeps the title line and the speech paragraph', () => {
     const { text } = slice(SONIA, 'offscreen', { present: ['Leon', 'Maddy'] });
     assert.ok(text.startsWith('# SONIA PEREZ'));
     assert.ok(text.includes('Fast, sharp, Spanish-English mixed.'));
-    assert.ok(!text.includes('Sample lines'));
+    assert.ok(text.includes('To Maddy, warm: "Ay, look at you. Come here."'), 'only two samples, both stay');
     assert.ok(text.includes('**Maddy** — Wants her to leave him.'), 'Maddy is here');
     assert.ok(text.includes('*Shared:* Eight years of pageants.'), 'Maddy is here: whole');
     assert.ok(text.includes('**Nate** — Wants him gone.'), 'Nate: the one-line entry stays');

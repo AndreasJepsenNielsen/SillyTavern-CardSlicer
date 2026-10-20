@@ -24,25 +24,23 @@ When it looks right, switch Mode to **Cut**.
 A character counts as **in the scene** when their name is in your last message, in the last two replies
 (not counting the state block), in a speaker label like `[Jules] (Tired):`, or in the state block's Physics row.
 
-A character is **on agenda** when they have a row in the state block's NPC Agendas, or are named in someone
-else's row (Jules's row says she's going to see Rue: both are on agenda).
+A character off-screen is **active** when their row in the state block's NPC Agendas involves you, someone in
+the scene or another carded character, or when someone else's row names them (Ellis's row says he texted Jules:
+Jules is active). A row that names nobody (working a shift, running errands) is **routine**.
 
 Nothing that drives a character is ever cut: Personality, Like and Want, Fear and Resent, Limits, Goals, Secrets,
-Knowledge, Inner Life, Coping and every section of the character's own (SEX AND KINK, FAITH AND USING) are always
-sent. What changes by level:
+Knowledge, Inner Life, Coping, Ordinary Day, Social World and every section of the character's own (SEX AND KINK,
+FAITH AND USING) are always sent. What changes by level:
 
-**In the scene**: the whole card, except
+**In the scene**: the whole card. History keeps its newest lines, every line naming someone whose entry is sent
+whole, and up to four more lines that match the scene.
 
-- **History**: the three newest lines, every line naming someone whose entry is sent whole, and up to four
-  more lines that match the scene.
-- **Ordinary Day and Social World**: only matched lines.
+**Off-screen, active**: the whole card. History keeps its newest lines and every line naming someone whose
+entry is sent whole.
 
-**On agenda** (off-screen, but the preset is moving them): the whole card, with Speech and Voice and every
-sample line, except Small Habits, Standing, and History beyond the newest lines and lines about people
-whose entry is sent whole.
-
-**Off-screen**: the whole card except History, Small Habits, Standing and the sample lines (the opening
-paragraph of Speech and Voice stays).
+**Off-screen, routine or no row**: History the same way as active, Speech and Voice keeps its description and
+three sample lines (lines labelled for texts or calls first, then lines to you, then the first ones), and
+Small Habits and Standing are left out.
 
 **Relationship entries**, at every level:
 
@@ -79,6 +77,7 @@ If the embedder can't be reached, it falls back to matching shared words and say
 | Replies read for who's here | 2 | Earlier replies read to decide who is in the scene. |
 | Newest history lines always kept | 3 | Recent events are the setup for the story. |
 | Matches added per card | 4 | Extra history lines and relationship entries added when they match the scene. |
+| Voice lines kept off-screen | 3 | Sample lines a routine or idle off-screen character keeps. |
 | Match threshold | 0.4 | How close a line has to be to count as a match (0 to 1). Lower adds more. |
 | Never slice | empty | Cards always sent whole, one name or entry title per line. |
 | Extra names | empty | `Entry title = name, name` when a card goes by names its keys don't list. |

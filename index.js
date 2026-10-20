@@ -18,6 +18,7 @@ const DEFAULTS = Object.freeze({
     recentHistory: 3, // newest HISTORY lines always kept
     useVectors: true, // match lines to the scene with Vector Storage's embedder
     topK: 4, // matched lines and entries added per card
+    voiceLines: 3, // sample lines an off-screen character keeps
     threshold: 0.4, // similarity needed for a match
     neverSlice: '',
     aliases: '',
@@ -333,10 +334,15 @@ async function processScan(args, activated, s) {
         const parsed = parseCard(entry.content, { knownNames });
         // A card whose name can't be found is never treated as off-screen.
         const unnamed = reg.names.length === 0;
-        const onAgenda = reg.rows.length > 0 || reg.namedIn.length > 0;
-        const mode = reg.present || unnamed ? 'present' : (onAgenda ? 'agenda' : 'offscreen');
+        // Active: their row involves Leon, someone in the scene or another carded character, or someone's row names them.
+        const others = registry.filter(o => o !== reg && !(o.world === entry.world && o.uid === entry.uid)).flatMap(o => o.names);
+        const involved = [...player, ...presentVariants, ...others];
+        const rowBody = (row) => row.text.replace(/^[^|]*\|/, ''); // the row without its owner's name
+        const active = reg.namedIn.length > 0 || reg.rows.some(row => mentionsAny(rowBody(row), involved));
+        const routine = !active && reg.rows.length > 0;
+        const mode = reg.present || unnamed ? 'present' : (active ? 'active' : 'offscreen');
         if (reg.present) report.present.push(display);
-        else if (onAgenda) report.agenda.push(display);
+        else if (active) report.agenda.push(display);
 
         const autoPerson = (p) => {
             const names = personNames(p);
@@ -355,7 +361,7 @@ async function processScan(args, activated, s) {
         }
         const autoLine = (text) => mentionsAny(text, lineNames);
         const plan = planCard(parsed, { mode, autoPerson, autoLine, recentHistory: Number(s.recentHistory) || 0 });
-        work.push({ entry, display, names: reg.names, unnamed, parsed, mode, plan, matched: null });
+        work.push({ entry, display, names: reg.names, unnamed, routine, parsed, mode, plan, matched: null });
     }
 
     // Match the rest against the scene.
@@ -383,7 +389,7 @@ async function processScan(args, activated, s) {
 
     for (const w of work) {
         const keep = new Set([...w.plan.keep, ...(w.matched || [])]);
-        const { text, stats } = sliceCard(w.parsed, w.mode, keep);
+        const { text, stats } = sliceCard(w.parsed, w.mode, keep, { voiceLines: Number(s.voiceLines) || 0, playerNames: player });
         const before = approxTokens(w.entry.content);
         const after = approxTokens(text);
         const speech = w.parsed.sections.find(x => x.kind === 'speech');
@@ -391,7 +397,7 @@ async function processScan(args, activated, s) {
         w.result = { text, stats, before, after, safe };
         report.cards.push({
             display: w.display, status: w.mode, before, after, safe, stats, text,
-            names: w.names, unnamed: w.unnamed,
+            names: w.names, unnamed: w.unnamed, routine: w.routine,
             matched: w.matched ? w.matched.size : 0,
         });
     }
@@ -418,8 +424,8 @@ function summarize(card) {
             }
         } else if (st.action === 'trimmed') {
             parts.push(`${st.label} ${st.kept}/${st.total} lines`);
-        } else if (st.action === 'paragraph') {
-            parts.push(`${st.label}: opening paragraph only`);
+        } else if (st.action === 'voice') {
+            parts.push(`${st.label}: ${st.kept}/${st.total} sample lines`);
         }
     }
     const dropped = (card.stats || []).filter(st => st.action === 'dropped' && st.kind !== 'relationships').map(st => st.label);
@@ -434,7 +440,7 @@ function renderReport(r) {
         el.html('<div class="card-slicer-muted">Nothing yet. Send a message and the cut for that turn shows here.</div>');
         return;
     }
-    const sliced = r.cards.filter(x => x.status === 'present' || x.status === 'agenda' || x.status === 'offscreen');
+    const sliced = r.cards.filter(x => x.status === 'present' || x.status === 'active' || x.status === 'offscreen');
     const saved = sliced.reduce((a, x) => a + (x.safe ? x.before - x.after : 0), 0);
     const before = sliced.reduce((a, x) => a + x.before, 0);
     const head = [
@@ -442,13 +448,13 @@ function renderReport(r) {
             ? `<b>Cut</b>: about ${saved.toLocaleString()} of ${before.toLocaleString()} card tokens left out this turn.`
             : `<b>Report only</b>: nothing was cut. Cutting would have left out about ${saved.toLocaleString()} of ${before.toLocaleString()} card tokens.`,
         `In the scene: ${r.present.length ? escapeHtml(r.present.join(', ')) : 'no carded character'}`,
-        `Moving off-screen (NPC Agendas): ${r.agenda && r.agenda.length ? escapeHtml(r.agenda.join(', ')) : 'nobody'}`,
+        `Active off-screen: ${r.agenda && r.agenda.length ? escapeHtml(r.agenda.join(', ')) : 'nobody'}`,
         `Matching: ${escapeHtml(r.matcher)}`,
     ];
     const rows = r.cards.map((x) => {
         if (x.status === 'player') return `<div class="card-slicer-card"><b>${escapeHtml(x.display)}</b> <span class="card-slicer-tag">your character</span> <span class="card-slicer-muted">sent whole</span></div>`;
         if (x.status === 'never') return `<div class="card-slicer-card"><b>${escapeHtml(x.display)}</b> <span class="card-slicer-tag">never slice</span> <span class="card-slicer-muted">sent whole</span></div>`;
-        const tag = { present: 'in scene', agenda: 'off-screen, on agenda', offscreen: 'off-screen' }[x.status] || x.status;
+        const tag = x.status === 'present' ? 'in scene' : x.status === 'active' ? 'off-screen, active' : (x.routine ? 'off-screen, routine' : 'off-screen');
         let warn = x.safe ? '' : '<div class="card-slicer-warn">Card not recognised cleanly, so it was sent whole.</div>';
         if (x.unnamed) warn += '<div class="card-slicer-warn">No name found for this card, so it is always treated as in the scene. Add it under Extra names.</div>';
         const matched = x.status === 'present' && x.matched ? ` · ${x.matched} matched to the scene` : '';
@@ -487,6 +493,8 @@ function settingsHtml() {
         <input id="cs_recent" type="number" min="0" max="20" step="1" class="text_pole">
         <label for="cs_topk" title="Extra history lines and relationship entries added per card when they match the scene">Matches added per card</label>
         <input id="cs_topk" type="number" min="0" max="20" step="1" class="text_pole">
+        <label for="cs_voice" title="Sample lines an off-screen character keeps, so a cutaway or a text still sounds like them">Voice lines kept off-screen</label>
+        <input id="cs_voice" type="number" min="0" max="20" step="1" class="text_pole">
         <label for="cs_threshold" title="How close a line must be to the scene to count as a match (0 to 1)">Match threshold</label>
         <input id="cs_threshold" type="number" min="0" max="1" step="0.05" class="text_pole">
       </div>
@@ -510,6 +518,7 @@ function bindSettings() {
     $('#cs_lookback').val(s.lookBack).on('input', function () { s.lookBack = Math.min(6, Math.max(1, parseInt(this.value, 10) || 2)); save(); });
     $('#cs_recent').val(s.recentHistory).on('input', function () { s.recentHistory = Math.min(20, Math.max(0, parseInt(this.value, 10) || 0)); save(); });
     $('#cs_topk').val(s.topK).on('input', function () { s.topK = Math.min(20, Math.max(0, parseInt(this.value, 10) || 0)); save(); });
+    $('#cs_voice').val(s.voiceLines).on('input', function () { s.voiceLines = Math.min(20, Math.max(0, parseInt(this.value, 10) || 0)); save(); });
     $('#cs_threshold').val(s.threshold).on('input', function () { const v = parseFloat(this.value); s.threshold = Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.4; save(); });
     $('#cs_vectors').prop('checked', !!s.useVectors).on('change', function () { s.useVectors = !!this.checked; save(); });
     $('#cs_never').val(s.neverSlice).on('input', function () { s.neverSlice = this.value; save(); });

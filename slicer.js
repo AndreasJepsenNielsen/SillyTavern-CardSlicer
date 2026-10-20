@@ -36,25 +36,31 @@ export const SECTION_LABELS = {
 };
 
 /**
- * Three levels:
- * - present: in the scene. Everything, with History, Ordinary Day and Social World matched to the scene.
- * - agenda: off-screen but being moved (a row in NPC Agendas, or named in someone's row). Everything except
- *   older History, Small Habits and Standing.
- * - offscreen: everything that drives what they do, without History, Small Habits, Standing or sample lines.
- * In every level, relationship entries for people outside the scene keep their Wants and Now lines.
+ * Three levels. Nothing that drives a character is cut at any of them.
+ * - present: in the scene. The whole card; History is the newest lines, lines about people whose entry is
+ *   whole, and lines matched to the scene.
+ * - active: off-screen, but their agenda row involves Leon, someone in the scene or another carded character,
+ *   or someone's row names them. The whole card; History is the newest lines and lines about people whose
+ *   entry is whole.
+ * - offscreen: everyone else. As active, but Speech keeps only its description and a few voice lines, and
+ *   Small Habits and Standing are left out.
+ * At every level, relationship entries for people outside the scene keep their Wants and Now lines.
  */
 const DROPPED = {
     present: new Set(),
-    agenda: new Set(['habits', 'standing']),
-    offscreen: new Set(['history', 'habits', 'standing']),
+    active: new Set(),
+    offscreen: new Set(['habits', 'standing']),
 };
 
 /** Sections whose lines are chosen one by one, per level. */
 const LINE_FILTERED = {
-    present: new Set(['history', 'ordinary', 'social']),
-    agenda: new Set(['history']),
-    offscreen: new Set(),
+    present: new Set(['history']),
+    active: new Set(['history']),
+    offscreen: new Set(['history']),
 };
+
+/** A sample line labelled for texts or calls, kept first among an off-screen character's voice lines. */
+const TEXT_LABEL_RE = /\b(?:text(?:s|ing|ed)?|phone|call(?:s|ing)?|message(?:s|d)?|DMs?|voicemail)\b/i;
 
 /** Lines of a relationship entry kept for someone outside the scene: what they want from them and where things stand. */
 const DRIVE_LINE_RE = /^\s*(?:[-*•]\s*)?\**\s*(?:Wants|Now)\b/i;
@@ -366,6 +372,45 @@ export function parseCard(text, { knownNames = [] } = {}) {
     return out;
 }
 
+/**
+ * SPEECH AND VOICE for an off-screen character: every line that describes the voice, plus a few sample lines
+ * so a cutaway or a text still sounds like them. Lines labelled for texts or calls come first, then lines to the
+ * player, then the rest in card order. The kept lines stay in their original order.
+ * @param {string[]} lines the section's lines
+ * @param {number} count how many sample lines to keep
+ * @param {string[]} playerNames
+ * @returns {{lines: string[], samples: number, kept: number}}
+ */
+export function speechAnchors(lines, count, playerNames = []) {
+    const sampleIdx = [];
+    lines.forEach((l, i) => {
+        const t = l.trim();
+        if (t && SAMPLE_START.test(t) && !/^(?:[-*•]\s*)?\**\s*(?:Sample lines|sample lines|Samples)\b/.test(t)) sampleIdx.push(i);
+    });
+    const label = (l) => {
+        const t = l.trim();
+        const q = t.search(/["“”]/);
+        return q > 0 ? t.slice(0, q) : t;
+    };
+    const ranked = [
+        ...sampleIdx.filter(i => TEXT_LABEL_RE.test(label(lines[i]))),
+        ...sampleIdx.filter(i => mentionsAny(label(lines[i]), playerNames)),
+        ...sampleIdx,
+    ];
+    const keep = new Set();
+    for (const i of ranked) {
+        if (keep.size >= Math.max(0, count)) break;
+        keep.add(i);
+    }
+    const isSample = new Set(sampleIdx);
+    const out = lines.filter((l, i) => {
+        if (isSample.has(i)) return keep.has(i);
+        if (/^(?:[-*•]\s*)?\**\s*(?:Sample lines|sample lines|Samples)\b/.test(l.trim())) return keep.size > 0;
+        return true;
+    });
+    return { lines: out, samples: sampleIdx.length, kept: keep.size };
+}
+
 /** The opening paragraph of SPEECH AND VOICE, without the sample lines. */
 export function speechParagraph(lines) {
     const out = [];
@@ -387,7 +432,7 @@ export function speechParagraph(lines) {
  * Decides which parts are kept for sure and which are candidates for matching against the scene.
  * Only the present level matches against the scene; the other levels keep by rule alone.
  * @param {ReturnType<typeof parseCard>} parsed
- * @param {{mode: 'present'|'agenda'|'offscreen', autoPerson: (p: object) => boolean, autoLine: (text: string) => boolean, recentHistory?: number}} opts
+ * @param {{mode: 'present'|'active'|'offscreen', autoPerson: (p: object) => boolean, autoLine: (text: string) => boolean, recentHistory?: number}} opts
  * @returns {{keep: Set<string>, candidates: {id: string, kind: string, text: string}[], matchable: {id: string, kind: string, text: string}[]}}
  */
 export function planCard(parsed, { mode, autoPerson, autoLine, recentHistory = 3 }) {
@@ -444,10 +489,11 @@ function trimBlankEdges(lines) {
 /**
  * Builds the sliced card.
  * @param {ReturnType<typeof parseCard>} parsed
- * @param {'present'|'agenda'|'offscreen'} mode
+ * @param {'present'|'active'|'offscreen'} mode
  * @param {Set<string>} keep ids of relationship entries kept whole and of filtered lines to keep
+ * @param {{voiceLines?: number, playerNames?: string[]}} [opts]
  */
-export function sliceCard(parsed, mode, keep) {
+export function sliceCard(parsed, mode, keep, { voiceLines = 3, playerNames = [] } = {}) {
     const out = [];
     const stats = [];
     const pre = trimBlankEdges(parsed.preamble);
@@ -478,8 +524,11 @@ export function sliceCard(parsed, mode, keep) {
         } else if (dropped.has(sec.kind)) {
             stat.action = 'dropped';
         } else if (mode === 'offscreen' && sec.kind === 'speech') {
-            body = speechParagraph(sec.lines);
-            stat.action = 'paragraph';
+            const a = speechAnchors(sec.lines, voiceLines, playerNames);
+            body = a.lines;
+            stat.total = a.samples;
+            stat.kept = a.kept;
+            stat.action = a.kept < a.samples ? 'voice' : 'kept';
         } else if (filtered.has(sec.kind)) {
             sec.lines.forEach((l, li) => {
                 if (!l.trim()) return;
