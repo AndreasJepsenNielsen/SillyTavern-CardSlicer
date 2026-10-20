@@ -500,9 +500,9 @@ function settingsHtml() {
       </div>
       <label class="checkbox_label"><input type="checkbox" id="cs_vectors"><span>Match with Vector Storage's embedder (keywords if it can't be reached)</span></label>
       <label for="cs_never">Never slice these cards (one name or title per line)</label>
-      <textarea id="cs_never" class="text_pole" rows="2" placeholder="Jules Vaughn"></textarea>
+      <textarea id="cs_never" class="text_pole" rows="2" placeholder="Example: Jules Vaughn (this grey text is only an example)"></textarea>
       <label for="cs_aliases">Extra names (one card per line: title = name, name)</label>
-      <textarea id="cs_aliases" class="text_pole" rows="2" placeholder="Fezco O'Neill = Fez, Fezco"></textarea>
+      <textarea id="cs_aliases" class="text_pole" rows="2" placeholder="Example: Fezco O'Neill = Fez, Fezco"></textarea>
       <hr>
       <b>Last turn</b>
       <div id="card_slicer_report"></div>
