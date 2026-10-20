@@ -334,7 +334,8 @@ async function processScan(args, activated, s) {
             const names = personNames(p);
             if (names.some(n => presentLc.has(n.toLowerCase()))) return true; // the player, or someone in the scene
             if (mentionsAny(scene.sceneText, names)) return true; // named in the scene
-            return relationMentioned(scene.queryText, p.paren); // "mom" for a heading marked (mother)
+            // "mom" for a heading marked (mother), "wife" for HIS WIFE AND CHILDREN
+            return relationMentioned(scene.queryText, `${p.paren} ${p.core}`);
         };
         const autoLine = (text) => mentionsAny(text, lineNames);
         const plan = planCard(parsed, { mode, autoPerson, autoLine, recentHistory: Number(s.recentHistory) || 0 });

@@ -48,7 +48,10 @@ const FIELD_RE = /^\s*(?:[-*•]\s*)?\**\s*(?:Wants|Hides|Speech|Shared(?:\s+his
 const SAMPLE_START = /^(?:[-*•]\s*)?(?:\**\s*(?:Sample lines|sample lines|Samples)\b|\(|["“”]|To [A-Z][^:]{0,40}:)/;
 
 const NAME_STOP = new Set(['the', 'a', 'an', 'and', 'of', 'mr', 'mrs', 'ms', 'dr', 'card', 'lead', 'minor', 'supporting',
-    'char', 'character', 'npc', 'entry', 'location', 'setting', 'scenario', 'narrator']);
+    'char', 'character', 'npc', 'entry', 'location', 'setting', 'scenario', 'narrator',
+    'his', 'her', 'hers', 'him', 'their', 'them', 'my', 'our', 'your', 'its', 'she', 'he', 'they', 'new', 'old']);
+
+const SMALL_WORDS = new Set(['and', 'of', 'the', 'de', 'van', 'von', 'da', 'la', 'le', 'del']);
 
 const RELATION_WORDS = {
     mother: ['mom', 'mother', 'mum', 'mama', 'mommy'],
@@ -64,6 +67,10 @@ const RELATION_WORDS = {
     cousin: ['cousin'],
     son: ['son'],
     daughter: ['daughter'],
+    children: ['children', 'kids', 'son', 'daughter'],
+    kids: ['children', 'kids'],
+    parents: ['parents', 'mom', 'dad'],
+    family: ['family'],
     wife: ['wife'],
     husband: ['husband'],
     boyfriend: ['boyfriend'],
@@ -174,10 +181,15 @@ export function looksLikeCard(text) {
 // ---------------------------------------------------------------- names
 
 export function titleCase(s) {
-    return String(s).toLowerCase().replace(/(^|[\s\-'’])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
+    const t = String(s).toLowerCase().replace(/(^|[\s\-'’])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
+    return t.replace(/(\s)(\p{L}+)/gu, (m, sp, w) => (SMALL_WORDS.has(w.toLowerCase()) ? sp + w.toLowerCase() : m));
 }
 
-/** Name forms to look for in the chat: the full name and the first name, as written and in Title Case. */
+/**
+ * Name forms to look for in the chat: the full name and the first name, as written and in Title Case.
+ * The first word on its own is only used when it is a real first name: capitalised, not possessive
+ * ("Rue's mom" is not a name for Rue) and not a lowercase phrase ("sugar daddy" does not give "sugar").
+ */
 export function nameVariants(raw) {
     const base = String(raw ?? '').replace(/\[[^\]]*\]|\([^)]*\)/g, ' ').replace(/[*_#"“”]/g, '').trim();
     const first = base.split(/\s+[—–|-]\s+|:/)[0].replace(/\s+/g, ' ').trim();
@@ -189,11 +201,13 @@ export function nameVariants(raw) {
         const t = String(x).trim();
         if (t.length >= 2 && !NAME_STOP.has(t.toLowerCase())) forms.add(t);
     };
+    const titled = (x) => (x === x.toUpperCase() && !x.includes('.') ? titleCase(x) : null);
     add(first);
-    if (first === first.toUpperCase()) add(titleCase(first));
-    if (words.length > 1) {
-        add(words[0]);
-        if (words[0] === words[0].toUpperCase()) add(titleCase(words[0]));
+    if (titled(first)) add(titled(first));
+    const w0 = words[0];
+    if (words.length > 1 && /^\p{Lu}/u.test(w0) && !/['’]s$/i.test(w0)) {
+        add(w0);
+        if (titled(w0)) add(titled(w0));
     }
     return [...forms];
 }
@@ -218,13 +232,13 @@ export function mentionsAny(text, variants) {
     return false;
 }
 
-/** For a relationship heading like "LESLIE BENNETT (mother)": does the scene mention "mom"? */
+/** For a relationship heading like "LESLIE BENNETT (mother)" or "HIS WIFE AND CHILDREN": does the scene mention "mom" or "wife"? */
 export function relationMentioned(text, paren) {
     const p = String(paren ?? '').toLowerCase();
     if (!p) return false;
     const words = new Set();
     for (const [key, list] of Object.entries(RELATION_WORDS)) {
-        if (new RegExp(`\\b${key}\\b`).test(p)) list.forEach(w => words.add(w));
+        if (new RegExp(`\\b${key}s?\\b`).test(p)) list.forEach(w => words.add(w));
     }
     if (!words.size) return false;
     const re = new RegExp(`\\b(?:${[...words].map(escapeRe).join('|')})s?\\b`, 'i');
@@ -252,8 +266,8 @@ export function parseCard(text, { knownNames = [] } = {}) {
         return known.has(firstWord);
     };
 
-    const startPerson = (info, line) => {
-        person = { header: line, core: info.core, paren: info.paren, lines: [] };
+    const startPerson = (info, line, sure) => {
+        person = { header: line, core: info.core, paren: info.paren, lines: [], sure };
         cur.persons.push(person);
     };
 
@@ -268,12 +282,11 @@ export function parseCard(text, { knownNames = [] } = {}) {
                 person = null;
                 continue;
             }
+            // Inside RELATIONSHIPS, every all-caps line starts an entry until the next known section.
+            // Entries that turn out not to be about a person become sections of their own below.
             if (cur && cur.kind === 'relationships') {
-                const looksPerson = !!h.paren || isKnown(h.core) || FIELD_RE.test(nextContentLine(lines, i));
-                if (looksPerson) {
-                    startPerson(h, line);
-                    continue;
-                }
+                startPerson(h, line, false);
+                continue;
             }
             if (!cur) {
                 out.preamble.push(line);
@@ -291,12 +304,12 @@ export function parseCard(text, { knownNames = [] } = {}) {
         if (cur && cur.kind === 'relationships') {
             const b = boldPersonHeader(line);
             if (b) {
-                startPerson(b, line);
+                startPerson(b, line, true);
                 continue;
             }
             const p = plainPersonHeader(line);
             if (p && (FIELD_RE.test(nextContentLine(lines, i)) || (isKnown(p.core) && /:\s*$|\)\s*$/.test(line.trim())))) {
-                startPerson(p, line);
+                startPerson(p, line, true);
                 continue;
             }
             if (person) person.lines.push(line);
@@ -307,6 +320,24 @@ export function parseCard(text, { knownNames = [] } = {}) {
         if (cur) cur.lines.push(line);
         else out.preamble.push(line);
     }
+
+    // An all-caps entry under RELATIONSHIPS with no name we know, no (relation) and no Wants/Hides/Speech
+    // lines is a section of the character's own (ADDICTION, VIOLENCE). It is moved out and kept as one.
+    const sections = [];
+    for (const s of out.sections) {
+        sections.push(s);
+        if (s.kind !== 'relationships') continue;
+        const persons = [];
+        const own = [];
+        for (const p of s.persons) {
+            const isPerson = p.sure || !!p.paren || isKnown(p.core) || p.lines.some(l => FIELD_RE.test(l));
+            if (isPerson) persons.push(p);
+            else own.push({ kind: 'custom', heading: p.header, title: p.core, lines: p.lines, intro: [], persons: [] });
+        }
+        s.persons = persons;
+        sections.push(...own);
+    }
+    out.sections = sections;
 
     for (const s of out.sections) {
         for (const p of s.persons) p.names = nameVariants(p.core);

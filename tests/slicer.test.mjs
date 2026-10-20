@@ -128,6 +128,62 @@ test('off-screen layout B keeps the title line and the speech paragraph', () => 
     assert.ok(!text.includes('**Nate**'));
 });
 
+// Ellis's layout from the first real report: an entry with no (relation) and no Wants/Hides lines
+// sits between relationship entries, and the player's entry comes after it.
+const ELLIS = `CANON POINT
+Portrayed at Season 3, Episode 6.
+
+IDENTITY
+50s. Real estate. Married. Pays Jules.
+
+SPEECH AND VOICE
+Warm, slow, a little paternal. Never raises his voice.
+(Pleased) "There she is."
+
+SEX AND KINK
+Likes being called sir.
+
+RELATIONSHIPS
+
+JULES VAUGHN (sugar baby)
+- Wants: her attention on Thursdays.
+- Speech: indulgent.
+
+HIS WIFE AND CHILDREN
+Married twenty years. Two kids in college. They know nothing about Jules.
+
+RUE BENNETT
+- Knows of her from Jules. Has never met her.
+
+LEON
+- Doesn't know: him at all.
+- Speech: polite, sizing him up.
+
+LIMITS
+Won't be seen with Jules in public. (At a limit) "Not here."`;
+
+test('relationship entries after a non-person heading are still entries (Ellis)', () => {
+    const p = S.parseCard(ELLIS, { knownNames: [...KNOWN, 'Rue Bennett'] });
+    const rel = p.sections.find(s => s.kind === 'relationships');
+    assert.deepEqual(rel.persons.map(x => x.core), ['JULES VAUGHN', 'RUE BENNETT', 'LEON']);
+    assert.ok(p.sections.some(s => s.kind === 'custom' && s.title === 'HIS WIFE AND CHILDREN'));
+    const off = slice(ELLIS, 'offscreen', { present: ['Leon', 'Leon Kennedy', 'Dez'] });
+    assert.ok(off.text.includes('LEON\n- Doesn\'t know: him at all.'), 'the player entry is kept off-screen');
+    assert.ok(!off.text.includes('RUE BENNETT'));
+    const on = slice(ELLIS, 'present', { present: ['Leon'], scene: 'He mentions his wife is out of town.' });
+    assert.ok(on.text.includes('HIS WIFE AND CHILDREN'), 'own section kept whole in scene');
+});
+
+test('names from keys: no possessives, no lowercase first words, no pronouns', () => {
+    assert.deepEqual(S.nameVariants("Rue's mom"), ["Rue's mom"]);
+    assert.deepEqual(S.nameVariants('sugar daddy'), ['sugar daddy']);
+    assert.deepEqual(S.nameVariants('HIS DAUGHTERS'), ['HIS DAUGHTERS', 'His Daughters']);
+    assert.deepEqual(S.nameVariants('R.B.'), ['R.B.']);
+    assert.equal(S.titleCase('NAZ AND ARTUR'), 'Naz and Artur');
+    assert.ok(S.relationMentioned('her kids are at camp', 'HIS WIFE AND CHILDREN'));
+    assert.ok(S.relationMentioned('Did your daughter call?', 'HIS DAUGHTERS'));
+});
+
 test('names: variants and whole-word matching', () => {
     assert.deepEqual(S.nameVariants('JULES VAUGHN').sort(), ['JULES', 'JULES VAUGHN', 'Jules', 'Jules Vaughn'].sort());
     assert.ok(S.mentionsAny("Rue's hoodie is on the floor", ['Rue']));
