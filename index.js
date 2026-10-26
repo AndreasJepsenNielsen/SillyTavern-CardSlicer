@@ -22,13 +22,20 @@ const DEFAULTS = Object.freeze({
     threshold: 0.4, // similarity needed for a match
     neverSlice: '',
     aliases: '',
+    steady: true, // keep each card's cut the same from turn to turn, so the prompt in front of the chat stays cacheable
 });
+
+// A card stays at a higher level (in the scene, active) this many of the player's turns after it last earned it,
+// so a name mentioned once doesn't recut the card on the next turn and again on the one after.
+const LINGER_TURNS = 3;
+const RANK = { offscreen: 1, active: 2, present: 3 };
 
 const runtime = {
     dryRun: false,
     genType: '',
     synced: new Map(),
     lastReport: null,
+    steady: new Map(), // world|uid -> { hash, mode, keep, matched, raisedAt } from the last turn, for this chat
 };
 
 function ctx() {
@@ -112,6 +119,8 @@ function readScene(chat, lookBack) {
         }
     }
     const userText = u >= 0 ? String(msgs[u].mes ?? '') : '';
+    let userTurn = 0;
+    for (let i = 0; i <= u; i++) if (msgs[i] && msgs[i].is_user && !msgs[i].is_system) userTurn++;
     const replies = [];
     for (let i = (u >= 0 ? u : msgs.length) - 1; i >= 0 && replies.length < Math.max(1, lookBack); i--) {
         const m = msgs[i];
@@ -128,6 +137,7 @@ function readScene(chat, lookBack) {
         queryText: [userText, replyProse[0] || ''].join('\n').trim().slice(-3000),
         labels,
         agenda: agendaRows(block),
+        userTurn,
     };
 }
 
@@ -340,9 +350,20 @@ async function processScan(args, activated, s) {
         const rowBody = (row) => row.text.replace(/^[^|]*\|/, ''); // the row without its owner's name
         const active = reg.namedIn.length > 0 || reg.rows.some(row => mentionsAny(rowBody(row), involved));
         const routine = !active && reg.rows.length > 0;
-        const mode = reg.present || unnamed ? 'present' : (active ? 'active' : 'offscreen');
-        if (reg.present) report.present.push(display);
-        else if (active) report.agenda.push(display);
+        const rawMode = reg.present || unnamed ? 'present' : (active ? 'active' : 'offscreen');
+        const key = `${entry.world}|${entry.uid}`;
+        const hash = stringHash(entry.content);
+        const prev = s.steady ? runtime.steady.get(key) : null;
+        const same = !!prev && prev.hash === hash;
+        // Steady: a card drops to a lower level only after LINGER_TURNS turns without earning its old one.
+        let mode = rawMode;
+        let raisedAt = scene.userTurn;
+        if (same && RANK[rawMode] < RANK[prev.mode] && scene.userTurn - prev.raisedAt < LINGER_TURNS) {
+            mode = prev.mode;
+            raisedAt = prev.raisedAt;
+        }
+        if (mode === 'present') report.present.push(display);
+        else if (mode === 'active') report.agenda.push(display);
 
         const autoPerson = (p) => {
             const names = personNames(p);
@@ -362,11 +383,19 @@ async function processScan(args, activated, s) {
         // Off-screen with a routine row or none: History keeps only its newest lines and lines with the player.
         const autoLine = mode === 'offscreen' ? (text) => mentionsAny(text, player) : (text) => mentionsAny(text, lineNames);
         const plan = planCard(parsed, { mode, autoPerson, autoLine, recentHistory: Number(s.recentHistory) || 0 });
-        work.push({ entry, display, names: reg.names, unnamed, routine, parsed, mode, plan, matched: null });
+        const w = { entry, display, names: reg.names, unnamed, routine, parsed, mode, plan, matched: null, key, hash, raisedAt, reused: false };
+        if (same && prev.mode === mode) {
+            // Same card, same level as last turn: keep last turn's cut. Lines about someone newly named are added
+            // (the cut only grows), and last turn's scene matches stay, so the text changes only when something new comes in.
+            for (const id of prev.keep) w.plan.keep.add(id);
+            w.matched = new Set(prev.matched);
+            w.reused = true;
+        }
+        work.push(w);
     }
 
     // Match the rest against the scene.
-    const needs = work.filter(w => w.mode === 'present' && w.plan.candidates.length);
+    const needs = work.filter(w => !w.reused && w.mode === 'present' && w.plan.candidates.length);
     if (needs.length) {
         report.matcher = 'keywords';
         let vectorsDone = false;
@@ -403,7 +432,15 @@ async function processScan(args, activated, s) {
             display: w.display, status: w.mode, before, after, safe, unchanged, stats, text: w.result.text,
             names: w.names, unnamed: w.unnamed, routine: w.routine,
             matched: w.matched ? w.matched.size : 0,
+            steady: w.reused && w.result.text === runtime.steady.get(w.key)?.text,
         });
+    }
+
+    // Remember this turn's cut for the next one (not for dry runs or background generations).
+    if (s.steady && !runtime.dryRun && runtime.genType !== 'quiet') {
+        for (const w of work) {
+            runtime.steady.set(w.key, { hash: w.hash, mode: w.mode, keep: new Set(w.plan.keep), matched: new Set(w.matched || []), raisedAt: w.raisedAt, text: w.result.text });
+        }
     }
 
     if (s.mode === 'cut') {
@@ -456,13 +493,15 @@ function renderReport(r) {
         `Active off-screen: ${r.agenda && r.agenda.length ? escapeHtml(r.agenda.join(', ')) : 'nobody'}`,
         `Matching: ${escapeHtml(r.matcher)}`,
     ];
+    const kept = sliced.filter(x => x.steady).length;
+    if (sliced.length) head.push(`Steady: ${kept} of ${sliced.length} cards sent exactly as last turn`);
     const rows = r.cards.map((x) => {
         if (x.status === 'player') return `<div class="card-slicer-card"><b>${escapeHtml(x.display)}</b> <span class="card-slicer-tag">your character</span> <span class="card-slicer-muted">sent whole</span></div>`;
         if (x.status === 'never') return `<div class="card-slicer-card"><b>${escapeHtml(x.display)}</b> <span class="card-slicer-tag">never slice</span> <span class="card-slicer-muted">sent whole</span></div>`;
         const tag = x.status === 'present' ? 'in scene' : x.status === 'active' ? 'off-screen, active' : (x.routine ? 'off-screen, routine' : 'off-screen');
         let warn = x.safe ? '' : '<div class="card-slicer-warn">Card not recognised cleanly, so it was sent whole.</div>';
         if (x.unnamed) warn += '<div class="card-slicer-warn">No name found for this card, so it is always treated as in the scene. Add it under Extra names.</div>';
-        const matched = x.status === 'present' && x.matched ? ` · ${x.matched} matched to the scene` : '';
+        const matched = (x.status === 'present' && x.matched ? ` · ${x.matched} matched to the scene` : '') + (x.steady ? ' · same as last turn' : '');
         const found = x.names && x.names.length ? `<div class="card-slicer-muted">Looked for as: ${escapeHtml(x.names.join(', '))}</div>` : '';
         return `<div class="card-slicer-card">
             <div><b>${escapeHtml(x.display)}</b> <span class="card-slicer-tag">${tag}</span> <span class="card-slicer-muted">≈${x.before.toLocaleString()} → ${x.after.toLocaleString()} tokens${matched}</span></div>
@@ -504,6 +543,7 @@ function settingsHtml() {
         <input id="cs_threshold" type="number" min="0" max="1" step="0.05" class="text_pole">
       </div>
       <label class="checkbox_label"><input type="checkbox" id="cs_vectors"><span>Match with Vector Storage's embedder (keywords if it can't be reached)</span></label>
+      <label class="checkbox_label" title="Each card keeps last turn's cut while its level stays the same, adding only lines about newly named people, and stays at a higher level for a few turns after it last earned it. The text in front of the chat then stays the same between turns, so the provider can cache it."><input type="checkbox" id="cs_steady"><span>Keep cards steady between turns (prompt caching)</span></label>
       <label for="cs_never">Never slice these cards (one name or title per line)</label>
       <textarea id="cs_never" class="text_pole" rows="2" placeholder="Example: Jules Vaughn (this grey text is only an example)"></textarea>
       <label for="cs_aliases">Extra names (one card per line: title = name, name)</label>
@@ -526,6 +566,7 @@ function bindSettings() {
     $('#cs_voice').val(s.voiceLines).on('input', function () { s.voiceLines = Math.min(20, Math.max(0, parseInt(this.value, 10) || 0)); save(); });
     $('#cs_threshold').val(s.threshold).on('input', function () { const v = parseFloat(this.value); s.threshold = Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.4; save(); });
     $('#cs_vectors').prop('checked', !!s.useVectors).on('change', function () { s.useVectors = !!this.checked; save(); });
+    $('#cs_steady').prop('checked', !!s.steady).on('change', function () { s.steady = !!this.checked; runtime.steady.clear(); save(); });
     $('#cs_never').val(s.neverSlice).on('input', function () { s.neverSlice = this.value; save(); });
     $('#cs_aliases').val(s.aliases).on('input', function () { s.aliases = this.value; save(); });
 }
@@ -548,6 +589,7 @@ jQuery(() => {
     if (typeof c.eventSource.makeLast === 'function') c.eventSource.makeLast(c.eventTypes.WORLDINFO_SCAN_DONE, onScanDone);
     else c.eventSource.on(c.eventTypes.WORLDINFO_SCAN_DONE, onScanDone);
     c.eventSource.on(c.eventTypes.CHAT_CHANGED, () => {
+        runtime.steady.clear();
         runtime.lastReport = null;
         renderReport(null);
     });

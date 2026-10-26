@@ -77,6 +77,24 @@ a card again when the card changes.
 
 If the embedder can't be reached, it falls back to matching shared words and says so in the panel.
 
+## Steady cards (prompt caching)
+
+Providers cache the start of a prompt and bill it cheaper while it stays the same from one request to the next.
+The cards come before the chat history, so a card whose text changes means everything after it, the whole
+chat included, is billed again in full. With **Keep cards steady between turns** on (the default):
+
+- A card keeps last turn's cut while its level (in the scene, active, off-screen) stays the same. The scene
+  matches it got when it reached that level stay; it does not pick new ones each turn.
+- Someone newly named gets their relationship entry and the history lines about them added, and they stay
+  added while the level holds. So the cut only grows, and the text changes only when something new comes in.
+- A card raised by a mention (named once in a reply) stays at that level for three of your turns after it
+  last earned it, then drops back. A name coming up every other turn doesn't recut the card each time.
+- A card that changed (a Card Updater run, an edit) and a new chat are always cut fresh.
+- Swipes and regenerations send the same cards. Dry runs and background generations never change what is kept.
+
+The panel's **Steady** line says how many cards went out exactly as the turn before. Turn it off to cut every
+turn fresh against the scene, as before.
+
 ## Settings
 
 | Setting | Default | What it does |
@@ -89,6 +107,7 @@ If the embedder can't be reached, it falls back to matching shared words and say
 | Match threshold | 0.4 | How close a line has to be to count as a match (0 to 1). Lower adds more. |
 | Never slice | empty | Cards always sent whole, one name or entry title per line. |
 | Extra names | empty | `Entry title = name, name` when a card goes by names its keys don't list. |
+| Keep cards steady between turns | on | Keeps each card's cut the same while its level holds, so the prompt stays cacheable. See Steady cards. |
 
 ## Good to know
 

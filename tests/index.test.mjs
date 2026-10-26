@@ -137,8 +137,11 @@ const REPLY_ALONE = `You unpack the last box. The apartment is quiet.
 </internal_states>
 <!-- GFX_END -->`;
 
-async function runScan({ user = 'I hold up the wine. "Housewarming. Sort of."', next = 0, type = 'normal', reply = REPLY } = {}) {
+async function runScan({ user = 'I hold up the wine. "Housewarming. Sort of."', next = 0, type = 'normal', reply = REPLY, earlier = 0, dryRun = false } = {}) {
+    const before = [];
+    for (let i = 0; i < earlier; i++) before.push({ is_user: true, is_system: false, mes: 'I nod.' }, { is_user: false, is_system: false, mes: 'Time passes.' });
     context.chat = [
+        ...before,
         { is_user: false, is_system: false, mes: 'Your new floor at The Marlowe is quiet.' },
         { is_user: true, is_system: false, mes: 'I knock on the door across the hall.' },
         { is_user: false, is_system: false, mes: reply },
@@ -146,14 +149,14 @@ async function runScan({ user = 'I hold up the wine. "Housewarming. Sort of."', 
     ];
     const entries = freshEntries();
     const activated = new Map(entries.map(e => [`${e.world}.${e.uid}`, e]));
-    for (const f of listeners.generation_started) await f(type, {}, false);
+    for (const f of listeners.generation_started) await f(type, {}, dryRun);
     const args = { state: { current: 1, next, loopCount: 1 }, activated: { entries: activated, text: '' }, sortedEntries: entries };
     for (const f of listeners.worldinfo_scan_done) await f(args);
     return Object.fromEntries(entries.map(e => [e.comment, e.content]));
 }
 
 function setSettings(extra) {
-    context.extensionSettings.cardSlicer = { enabled: true, mode: 'cut', lookBack: 2, recentHistory: 3, useVectors: true, topK: 4, threshold: 0.4, neverSlice: '', aliases: '', ...extra };
+    context.extensionSettings.cardSlicer = { enabled: true, mode: 'cut', lookBack: 2, recentHistory: 3, useVectors: true, topK: 4, threshold: 0.4, neverSlice: '', aliases: '', steady: false, ...extra };
 }
 
 test('keyword path: Jules in scene is trimmed, Rue on a routine row is off-screen, others untouched', async () => {
@@ -343,4 +346,80 @@ LEON (new neighbour)
     const html = elements.get('#card_slicer_report')._html;
     assert.ok(html.includes('Nothing to cut, sent as it is'));
     assert.ok(!html.includes('not recognised cleanly'));
+});
+
+// ---------------------------------------------------------------- steady cuts (prompt caching)
+
+async function newChat() {
+    for (const f of listeners.chat_id_changed) await f();
+}
+
+test('steady: the same cast sends byte-identical cards on the next turn, even when the scene text differs', async () => {
+    setSettings({ useVectors: false, steady: true });
+    await newChat();
+    const first = await runScan();
+    const second = await runScan({ user: 'I tell her the canvases by the window look new.', earlier: 1 });
+    assert.equal(second['Jules Vaughn'], first['Jules Vaughn']);
+    assert.equal(second['Rue Bennett'], first['Rue Bennett']);
+    assert.ok(elements.get('#card_slicer_report')._html.includes('Steady: 2 of 2 cards sent exactly as last turn'));
+});
+
+test('steady: someone newly named is added, and stays added', async () => {
+    setSettings({ useVectors: false, steady: true });
+    await newChat();
+    const first = await runScan();
+    assert.ok(!first['Jules Vaughn'].includes('she hangs up'), 'absent mother: wants line only');
+    const mom = await runScan({ user: 'Does your mom know you live here?', earlier: 1 });
+    assert.ok(mom['Jules Vaughn'].includes('she hangs up'), 'mother named: whole entry');
+    const after = await runScan({ user: 'I pour the wine.', earlier: 2 });
+    assert.equal(after['Jules Vaughn'], mom['Jules Vaughn'], 'the cut only grows while the level holds');
+});
+
+test('steady: a card raised by a mention lingers, then drops after three turns', async () => {
+    setSettings({ useVectors: false, steady: true });
+    await newChat();
+    await runScan({ reply: REPLY_NO_AGENDA });
+    const named = await runScan({ reply: REPLY_NO_AGENDA, user: 'Does Rue still come by?', earlier: 1 });
+    assert.ok(named['Rue Bennett'].includes('(Warm)'), 'named: full card');
+    const t2 = await runScan({ reply: REPLY_NO_AGENDA, earlier: 2 });
+    const t3 = await runScan({ reply: REPLY_NO_AGENDA, earlier: 3 });
+    assert.equal(t2['Rue Bennett'], named['Rue Bennett'], 'lingers');
+    assert.equal(t3['Rue Bennett'], named['Rue Bennett'], 'still lingers');
+    const t4 = await runScan({ reply: REPLY_NO_AGENDA, earlier: 4 });
+    assert.ok(!t4['Rue Bennett'].includes('(Warm)'), 'drops back after three turns');
+});
+
+test('steady: a swipe of the same turn sends the same cards', async () => {
+    setSettings({ useVectors: false, steady: true });
+    await newChat();
+    const a = await runScan({ user: 'Does Rue still come by?' });
+    const b = await runScan({ user: 'Does Rue still come by?' });
+    assert.deepEqual(b, a);
+});
+
+test('steady: an updated card is cut fresh, and a new chat starts fresh', async () => {
+    setSettings({ useVectors: false, steady: true });
+    await newChat();
+    await runScan();
+    await runScan({ user: 'Does your mom know you live here?', earlier: 1 });
+    await newChat();
+    const fresh = await runScan({ earlier: 2 });
+    assert.ok(!fresh['Jules Vaughn'].includes('she hangs up'), 'new chat: no carry-over');
+});
+
+test('steady: dry runs read last turn but never change it', async () => {
+    setSettings({ useVectors: false, steady: true });
+    await newChat();
+    const first = await runScan();
+    await runScan({ user: 'Does your mom know you live here?', earlier: 1, dryRun: true });
+    const next = await runScan({ user: 'I pour the wine.', earlier: 1 });
+    assert.equal(next['Jules Vaughn'], first['Jules Vaughn'], 'the dry run did not add the mother entry');
+});
+
+test('steady off: each turn is cut fresh', async () => {
+    setSettings({ useVectors: false, steady: false });
+    await newChat();
+    await runScan({ user: 'Does your mom know you live here?' });
+    const next = await runScan({ user: 'I pour the wine.', earlier: 1 });
+    assert.ok(!next['Jules Vaughn'].includes('she hangs up'));
 });
