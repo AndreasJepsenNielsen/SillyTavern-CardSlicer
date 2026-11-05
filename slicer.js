@@ -718,3 +718,36 @@ export function orderForCache(entries, state, update = true) {
     }
     return rows.map(r => r.key);
 }
+
+/**
+ * Keeps entries that come and go (keywords, Vector Storage) in the prompt for `turns` of the player's turns after
+ * they stop triggering, the way SillyTavern's Sticky does for a single entry. A place or side character mentioned
+ * once then stays put instead of leaving and coming back, and every leave or return breaks the provider's cache.
+ * Entries with their own Sticky, Cooldown or Delay are left to SillyTavern. `activated` is SillyTavern's map of
+ * activated entries (key world.uid), `pool` every entry of the active lorebooks. state: { last: Map(key -> the
+ * player's turn it last triggered on its own) }, kept per chat. update: false for dry runs and quiet generations.
+ * Returns the keys put back.
+ */
+export function lingerEntries(activated, pool, state, turn, turns, update = true) {
+    const keyOf = e => `${e.world}.${e.uid}`;
+    const own = e => (Number(e.sticky) || 0) > 0 || (Number(e.cooldown) || 0) > 0 || (Number(e.delay) || 0) > 0;
+    const last = state.last instanceof Map ? state.last : new Map();
+    const added = [];
+    if (turns > 0) {
+        const byKey = new Map(pool.filter(e => e && typeof e === 'object' && !e.disable).map(e => [keyOf(e), e]));
+        for (const [key, at] of last) {
+            if (activated.has(key) || turn - at > turns) continue;
+            const e = byKey.get(key);
+            if (!e || e.constant || own(e)) continue;
+            activated.set(key, e);
+            added.push(key);
+        }
+    }
+    if (update) {
+        const next = new Map();
+        for (const [key, at] of last) if (turn - at <= turns) next.set(key, at);
+        for (const [key, e] of activated) if (e && !e.constant && !own(e) && !added.includes(key)) next.set(key, turn);
+        state.last = next;
+    }
+    return added;
+}

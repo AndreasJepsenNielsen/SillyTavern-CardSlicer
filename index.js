@@ -6,7 +6,7 @@
 import {
     looksLikeCard, parseCard, planCard, sliceCard, nameVariants, titleCase, mentionsAny, relationMentioned,
     cleanProse, stateBlock, speakerLabels, physicsText, agendaRows, sigWords, overlap, stringHash, approxTokens, plainHeading,
-    orderForCache,
+    orderForCache, lingerEntries,
 } from './slicer.js';
 
 const MODULE = 'cardSlicer';
@@ -25,6 +25,7 @@ const DEFAULTS = Object.freeze({
     aliases: '',
     steady: true, // keep each card's cut the same from turn to turn, so the prompt in front of the chat stays cacheable
     cacheOrder: true, // lay out lorebook entries so the ones that change between turns come last (prompt caching)
+    lingerTurns: 3, // keep an entry that comes and goes this many of the player's turns after it stops triggering (0: off)
 });
 
 // A card stays at a higher level (in the scene, active) this many of the player's turns after it last earned it,
@@ -39,6 +40,7 @@ const runtime = {
     lastReport: null,
     steady: new Map(), // world|uid -> { hash, mode, keep, matched, raisedAt } from the last turn, for this chat
     cache: { seq: 0, seen: new Map() }, // world|uid -> { hash, since }: how long each sent entry has stayed the same, for this chat
+    linger: { last: new Map() }, // world.uid -> the player's turn it last triggered on its own, for this chat
 };
 
 function ctx() {
@@ -263,8 +265,18 @@ function keywordMatch(w, queryText, s, exclude) {
 async function onScanDone(args) {
     if (!args || !args.state || args.state.next !== 0) return; // only once the scan has finished
     const activated = args.activated && args.activated.entries;
-    if (!(activated instanceof Map) || activated.size === 0) return;
+    if (!(activated instanceof Map) || (activated.size === 0 && runtime.linger.last.size === 0)) return;
     const s = settings();
+    const record = !runtime.dryRun && runtime.genType !== 'quiet';
+    const turns = Math.max(0, Number(s.lingerTurns) || 0);
+    if (turns > 0 || runtime.linger.last.size) {
+        try {
+            const pool = Array.isArray(args.sortedEntries) ? args.sortedEntries : [];
+            lingerEntries(activated, pool, runtime.linger, playerTurn(ctx().chat), turns, record);
+        } catch (err) {
+            console.error(LOG, 'could not keep recent entries; SillyTavern\'s own pick was kept', err);
+        }
+    }
     if (s.enabled) {
         try {
             await processScan(args, activated, s);
@@ -274,11 +286,17 @@ async function onScanDone(args) {
     }
     if (s.cacheOrder) {
         try {
-            orderForCache([...activated.values()], runtime.cache, !runtime.dryRun && runtime.genType !== 'quiet');
+            orderForCache([...activated.values()], runtime.cache, record);
         } catch (err) {
             console.error(LOG, 'could not order the lorebook for caching; SillyTavern\'s own order was kept', err);
         }
     }
+}
+
+// The player's turn number: every message they sent, hidden ones included (Summaryception hides old turns), so it
+// only grows as the chat does and a swipe never moves it.
+function playerTurn(chat) {
+    return (Array.isArray(chat) ? chat : []).filter(m => m && m.is_user).length;
 }
 
 async function processScan(args, activated, s) {
@@ -555,6 +573,8 @@ function settingsHtml() {
       </div>
       <label class="checkbox_label"><input type="checkbox" id="cs_vectors"><span>Match with Vector Storage's embedder (keywords if it can't be reached)</span></label>
       <label class="checkbox_label" title="Always-on entries go first and entries that come and go by keyword (places, side characters) go last, with anything that just changed moved to the end of its group. A change then breaks the provider's prompt cache only from that point on, instead of from the top of the lorebook. Works even with slicing turned off."><input type="checkbox" id="cs_cacheorder"><span>Order lorebook entries for prompt caching</span></label>
+      <label for="cs_linger" title="A place or side character that triggers by keyword stays in the prompt this many of your turns after it was last mentioned, like SillyTavern's Sticky on every such entry. It stops entries leaving and coming back every turn, which breaks the prompt cache each time. Entries with their own Sticky, Cooldown or Delay are left alone. 0 turns it off.">Keep entries that come and go for this many turns</label>
+      <input id="cs_linger" type="number" min="0" max="10" step="1" class="text_pole">
       <label class="checkbox_label" title="Each card keeps last turn's cut while its level stays the same, adding only lines about newly named people, and stays at a higher level for a few turns after it last earned it. The text in front of the chat then stays the same between turns, so the provider can cache it."><input type="checkbox" id="cs_steady"><span>Keep cards steady between turns (prompt caching)</span></label>
       <label for="cs_never">Never slice these cards (one name or title per line)</label>
       <textarea id="cs_never" class="text_pole" rows="2" placeholder="Example: Jules Vaughn (this grey text is only an example)"></textarea>
@@ -579,6 +599,7 @@ function bindSettings() {
     $('#cs_threshold').val(s.threshold).on('input', function () { const v = parseFloat(this.value); s.threshold = Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.4; save(); });
     $('#cs_vectors').prop('checked', !!s.useVectors).on('change', function () { s.useVectors = !!this.checked; save(); });
     $('#cs_cacheorder').prop('checked', !!s.cacheOrder).on('change', function () { s.cacheOrder = !!this.checked; runtime.cache = { seq: 0, seen: new Map() }; save(); });
+    $('#cs_linger').val(s.lingerTurns).on('input', function () { s.lingerTurns = Math.min(10, Math.max(0, parseInt(this.value, 10) || 0)); save(); });
     $('#cs_steady').prop('checked', !!s.steady).on('change', function () { s.steady = !!this.checked; runtime.steady.clear(); save(); });
     $('#cs_never').val(s.neverSlice).on('input', function () { s.neverSlice = this.value; save(); });
     $('#cs_aliases').val(s.aliases).on('input', function () { s.aliases = this.value; save(); });
@@ -604,6 +625,7 @@ jQuery(() => {
     c.eventSource.on(c.eventTypes.CHAT_CHANGED, () => {
         runtime.steady.clear();
         runtime.cache = { seq: 0, seen: new Map() };
+        runtime.linger = { last: new Map() };
         runtime.lastReport = null;
         renderReport(null);
     });

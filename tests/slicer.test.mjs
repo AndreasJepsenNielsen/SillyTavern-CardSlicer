@@ -336,3 +336,64 @@ test('cache order: a read without update never changes the state', () => {
     S.orderForCache([mkE(2), mkE(1)], state, false);
     assert.equal(JSON.stringify([state.seq, [...state.seen]]), before);
 });
+
+// ---------------------------------------------------------------- linger
+
+const pl = (uid, extra = {}) => ({ uid, world: 'W', constant: false, content: `PLACE ${uid}`, order: 10, ...extra });
+const actMap = (...es) => new Map(es.map(e => [`${e.world}.${e.uid}`, e]));
+
+test('linger: an entry that stops triggering stays three turns, then drops', () => {
+    const state = { last: new Map() };
+    const pool = [pl(1), pl(2)];
+    S.lingerEntries(actMap(pl(1), pl(2)), pool, state, 1, 3);
+    for (const turn of [2, 3, 4]) {
+        const a = actMap(pl(1));
+        assert.deepEqual(S.lingerEntries(a, pool, state, turn, 3), ['W.2'], `turn ${turn}: kept`);
+        assert.ok(a.has('W.2'));
+    }
+    const a5 = actMap(pl(1));
+    assert.deepEqual(S.lingerEntries(a5, pool, state, 5, 3), [], 'turn 5: dropped');
+    assert.ok(!a5.has('W.2'));
+});
+
+test('linger: a swipe does not use up a turn, and a mention starts the count again', () => {
+    const state = { last: new Map() };
+    const pool = [pl(1), pl(2)];
+    S.lingerEntries(actMap(pl(1), pl(2)), pool, state, 1, 3);
+    for (let i = 0; i < 5; i++) S.lingerEntries(actMap(pl(1)), pool, state, 2, 3); // five swipes of turn 2
+    assert.deepEqual(S.lingerEntries(actMap(pl(1)), pool, state, 4, 3), ['W.2'], 'still within three turns');
+    S.lingerEntries(actMap(pl(1), pl(2)), pool, state, 5, 3); // mentioned again
+    assert.deepEqual(S.lingerEntries(actMap(pl(1)), pool, state, 8, 3), ['W.2']);
+});
+
+test('linger: entries with their own Sticky, Cooldown or Delay, always-on and disabled entries are left alone', () => {
+    const state = { last: new Map() };
+    const pool = [pl(1, { sticky: 2 }), pl(2, { cooldown: 1 }), pl(3, { constant: true }), pl(4)];
+    S.lingerEntries(actMap(...pool), pool, state, 1, 3);
+    const pool2 = [pl(1, { sticky: 2 }), pl(2, { cooldown: 1 }), pl(3, { constant: true }), pl(4, { disable: true })];
+    assert.deepEqual(S.lingerEntries(new Map(), pool2, state, 2, 3), []);
+});
+
+test('linger: a dry run puts entries back but never changes the state', () => {
+    const state = { last: new Map() };
+    const pool = [pl(1), pl(2)];
+    S.lingerEntries(actMap(pl(1), pl(2)), pool, state, 1, 3);
+    const before = JSON.stringify([...state.last]);
+    const a = actMap(pl(1));
+    assert.deepEqual(S.lingerEntries(a, pool, state, 2, 3, false), ['W.2']);
+    assert.equal(JSON.stringify([...state.last]), before);
+});
+
+test('linger and order together: a kept entry holds its place', () => {
+    const lin = { last: new Map() }, ord = { seq: 0, seen: new Map() };
+    const pool1 = [pl(1, { order: 5 }), pl(2, { order: 10 }), pl(3, { order: 20 })];
+    const a1 = actMap(...pool1);
+    S.lingerEntries(a1, pool1, lin, 1, 3);
+    S.orderForCache([...a1.values()], ord);
+    const first = laidOut([...a1.values()]);
+    const pool2 = [pl(1, { order: 5 }), pl(2, { order: 10 }), pl(3, { order: 20 })];
+    const a2 = actMap(pool2[0], pool2[2]); // the middle one was not mentioned
+    S.lingerEntries(a2, pool2, lin, 2, 3);
+    S.orderForCache([...a2.values()], ord);
+    assert.deepEqual(laidOut([...a2.values()]), first, 'same entries in the same order');
+});

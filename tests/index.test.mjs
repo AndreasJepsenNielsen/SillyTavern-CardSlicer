@@ -441,3 +441,20 @@ test('cache order runs with slicing off, and its setting turns it off', async ()
     assert.equal(p2.order, 1);
     assert.equal(r2.order, 100);
 });
+
+test('linger runs through the event: a place mentioned once stays for the next turn', async () => {
+    setSettings({ enabled: false, cacheOrder: true, lingerTurns: 3 });
+    await newChat();
+    const mk = () => ({ uid: 7, world: 'W', comment: 'Bar', key: ['bar'], content: 'THE BAR\n- A bar.', order: 1, constant: false, disable: false });
+    const scan = async (turns, active) => {
+        context.chat = Array.from({ length: turns }, () => ({ is_user: true, is_system: false, mes: 'x' }));
+        const pool = [mk()];
+        const activated = new Map(active ? [['W.7', pool[0]]] : []);
+        for (const f of listeners.generation_started) await f('normal', {}, false);
+        for (const f of listeners.worldinfo_scan_done) await f({ state: { current: 1, next: 0, loopCount: 1 }, activated: { entries: activated, text: '' }, sortedEntries: pool });
+        return activated;
+    };
+    await scan(1, true);
+    assert.ok((await scan(2, false)).has('W.7'), 'kept the turn after');
+    assert.ok(!(await scan(6, false)).has('W.7'), 'gone after three quiet turns');
+});

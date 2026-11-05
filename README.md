@@ -109,6 +109,12 @@ Inside each group the entry that has stayed the same longest comes first, so one
 drops to the end of its group. Only the copies being sent are reordered; the saved lorebook is never changed. This
 works with slicing turned off too.
 
+**Keep entries that come and go for this many turns** (3 by default) keeps a place or side character in the prompt
+for that many of your turns after it was last mentioned, the way SillyTavern's Sticky does for one entry, applied to
+every entry that triggers by keyword. Without it they leave and come back nearly every turn, and each time the cache
+breaks from their spot. Swipes don't count as turns. Entries with their own Sticky, Cooldown or Delay are left to
+SillyTavern. 0 turns it off.
+
 ## Settings
 
 | Setting | Default | What it does |
@@ -123,6 +129,7 @@ works with slicing turned off too.
 | Extra names | empty | `Entry title = name, name` when a card goes by names its keys don't list. |
 | Keep cards steady between turns | on | Keeps each card's cut the same while its level holds, so the prompt stays cacheable. See Steady cards. |
 | Order lorebook entries for prompt caching | on | Always-on entries first, entries that come and go last, recently changed ones at the end of their group. See Lorebook order. |
+| Keep entries that come and go for this many turns | 3 | Sticky for every keyword entry, counted in your turns. 0 turns it off. See Lorebook order. |
 
 ## Good to know
 
