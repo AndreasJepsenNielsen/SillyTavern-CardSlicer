@@ -423,3 +423,21 @@ test('steady off: each turn is cut fresh', async () => {
     const next = await runScan({ user: 'I pour the wine.', earlier: 1 });
     assert.ok(!next['Jules Vaughn'].includes('she hangs up'));
 });
+
+// ---------------------------------------------------------------- cache order
+
+test('cache order runs with slicing off, and its setting turns it off', async () => {
+    setSettings({ enabled: false, cacheOrder: true });
+    await newChat();
+    const place = { uid: 9, world: 'W', comment: 'Place', key: ['bar'], content: 'THE BAR\n- A bar.', order: 1, constant: false, disable: false };
+    const rules = { uid: 8, world: 'W', comment: 'Rules', key: [], content: 'SETTING\n- Rules.', order: 100, constant: true, disable: false };
+    const activated = new Map([['W.9', place], ['W.8', rules]]);
+    for (const f of listeners.generation_started) await f('normal', {}, false);
+    for (const f of listeners.worldinfo_scan_done) await f({ state: { current: 1, next: 0, loopCount: 1 }, activated: { entries: activated, text: '' }, sortedEntries: [place, rules] });
+    assert.ok(rules.order < place.order, 'the always-on entry is laid out first');
+    setSettings({ enabled: false, cacheOrder: false });
+    const p2 = { ...place, order: 1 }, r2 = { ...rules, order: 100 };
+    for (const f of listeners.worldinfo_scan_done) await f({ state: { current: 1, next: 0, loopCount: 1 }, activated: { entries: new Map([['W.9', p2], ['W.8', r2]]), text: '' }, sortedEntries: [p2, r2] });
+    assert.equal(p2.order, 1);
+    assert.equal(r2.order, 100);
+});

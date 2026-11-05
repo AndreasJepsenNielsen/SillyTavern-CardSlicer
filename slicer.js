@@ -682,3 +682,39 @@ export function stringHash(str, seed = 0) {
 export function approxTokens(text) {
     return Math.round(String(text ?? '').length / 3.8);
 }
+
+// ---------------------------------------------------------------- cache order
+
+/**
+ * Lays out the activated lorebook entries so the text in front of the chat changes as late as possible from
+ * turn to turn, which is what lets the provider reuse its prompt cache. SillyTavern sends entries in ascending
+ * `order`; this rewrites `order` on the activated copies only (never the saved lorebook):
+ * always-on entries that aren't cards first, then always-on cards, then entries that come and go (keywords,
+ * vectors). Inside each group the entry unchanged for longest comes first, then the lorebook's own order, so an
+ * entry that just came in or was just recut drops to the end of its group instead of breaking everything after it.
+ * state: { seq, seen: Map(world|uid -> { hash, since }) }, kept per chat. update: false for dry runs and quiet
+ * generations, which read the state but never change it.
+ */
+export function orderForCache(entries, state, update = true) {
+    const seq = (Number(state.seq) || 0) + 1;
+    const seen = state.seen instanceof Map ? state.seen : new Map();
+    const rows = entries.filter(e => e && typeof e === 'object').map(e => {
+        const content = String(e.content ?? '');
+        const key = `${e.world ?? ''}|${e.uid ?? ''}`;
+        const hash = stringHash(content);
+        const prev = seen.get(key);
+        return {
+            e, key, hash,
+            since: prev && prev.hash === hash ? prev.since : seq,
+            group: e.constant ? (looksLikeCard(content) ? 1 : 0) : 2,
+            order: Number(e.order) || 0,
+        };
+    });
+    rows.sort((a, b) => a.group - b.group || a.since - b.since || a.order - b.order || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    rows.forEach((r, i) => { r.e.order = i + 1; });
+    if (update) {
+        state.seq = seq;
+        state.seen = new Map(rows.map(r => [r.key, { hash: r.hash, since: r.since }]));
+    }
+    return rows.map(r => r.key);
+}

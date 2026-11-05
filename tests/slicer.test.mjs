@@ -290,3 +290,49 @@ test('hash matches SillyTavern getStringHash', () => {
     assert.equal(S.stringHash('abc'), S.stringHash('abc'));
     assert.notEqual(S.stringHash('abc'), S.stringHash('abd'));
 });
+
+// ---------------------------------------------------------------- cache order
+
+const CARD = `IDENTITY\n- 30. Example.\n\nPERSONALITY\n1. Alone: reads.\n\nSPEECH AND VOICE\nShort.\n\nRELATIONSHIPS\n- NOBODY: none.`;
+const mkE = (uid, { constant = false, order = 100, content = `PLACE ${uid}\n- A place.` } = {}) => ({ uid, world: 'W', constant, order, content });
+const laidOut = (entries) => [...entries].sort((a, b) => b.order - a.order).reduce((out, e) => (out.unshift(e.uid), out), []); // SillyTavern's own layout
+
+test('cache order: always-on entries first, cards next, keyword entries last', () => {
+    const state = { seq: 0, seen: new Map() };
+    const place = mkE(1, { order: 10 });
+    const rules = mkE(2, { constant: true, order: 100 });
+    const card = mkE(3, { constant: true, order: 50, content: CARD });
+    const side = mkE(4, { order: 5, content: CARD });
+    S.orderForCache([place, rules, card, side], state);
+    assert.deepEqual(laidOut([place, rules, card, side]), [2, 3, 4, 1], "keyword entries keep the lorebook's own order among themselves");
+});
+
+test('cache order: an entry that just came in goes to the end; ones that stayed keep their place', () => {
+    const state = { seq: 0, seen: new Map() };
+    const a = mkE(1, { order: 10 }), b = mkE(2, { order: 20 });
+    S.orderForCache([a, b], state);
+    const c = mkE(3, { order: 1 }); // lowest order, but new this turn
+    const a2 = mkE(1, { order: 10 }), b2 = mkE(2, { order: 20 });
+    S.orderForCache([c, a2, b2], state);
+    assert.deepEqual(laidOut([c, a2, b2]), [1, 2, 3]);
+});
+
+test('cache order: a card whose text changed moves to the end of its group', () => {
+    const state = { seq: 0, seen: new Map() };
+    const x = mkE(1, { constant: true, order: 1, content: CARD }), y = mkE(2, { constant: true, order: 2, content: CARD + '\n- MORE: x.' });
+    S.orderForCache([x, y], state);
+    const x2 = mkE(1, { constant: true, order: 1, content: CARD + '\n- RECUT: y.' }), y2 = mkE(2, { constant: true, order: 2, content: CARD + '\n- MORE: x.' });
+    S.orderForCache([x2, y2], state);
+    assert.deepEqual(laidOut([x2, y2]), [2, 1]);
+    const x3 = mkE(1, { constant: true, order: 1, content: CARD + '\n- RECUT: y.' }), y3 = mkE(2, { constant: true, order: 2, content: CARD + '\n- MORE: x.' });
+    S.orderForCache([x3, y3], state);
+    assert.deepEqual(laidOut([x3, y3]), [2, 1], 'and stays there while nothing changes');
+});
+
+test('cache order: a read without update never changes the state', () => {
+    const state = { seq: 0, seen: new Map() };
+    S.orderForCache([mkE(1)], state);
+    const before = JSON.stringify([state.seq, [...state.seen]]);
+    S.orderForCache([mkE(2), mkE(1)], state, false);
+    assert.equal(JSON.stringify([state.seq, [...state.seen]]), before);
+});

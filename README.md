@@ -95,6 +95,20 @@ chat included, is billed again in full. With **Keep cards steady between turns**
 The panel's **Steady** line says how many cards went out exactly as the turn before. Turn it off to cut every
 turn fresh against the scene, as before.
 
+## Lorebook order (prompt caching)
+
+SillyTavern lays out lorebook entries by their order number, lowest first. When an entry near the top comes or goes
+(a place or a side character pulled in by a keyword) or is recut, everything after it misses the provider's cache.
+With **Order lorebook entries for prompt caching** on (the default), Card Slicer lays out the entries it is handed as:
+
+1. always-on entries that aren't cards (setting, rules, narration voice),
+2. always-on cards,
+3. entries that come and go (keywords, Vector Storage).
+
+Inside each group the entry that has stayed the same longest comes first, so one that just came in or was just recut
+drops to the end of its group. Only the copies being sent are reordered; the saved lorebook is never changed. This
+works with slicing turned off too.
+
 ## Settings
 
 | Setting | Default | What it does |
@@ -108,6 +122,7 @@ turn fresh against the scene, as before.
 | Never slice | empty | Cards always sent whole, one name or entry title per line. |
 | Extra names | empty | `Entry title = name, name` when a card goes by names its keys don't list. |
 | Keep cards steady between turns | on | Keeps each card's cut the same while its level holds, so the prompt stays cacheable. See Steady cards. |
+| Order lorebook entries for prompt caching | on | Always-on entries first, entries that come and go last, recently changed ones at the end of their group. See Lorebook order. |
 
 ## Good to know
 

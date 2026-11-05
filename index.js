@@ -6,6 +6,7 @@
 import {
     looksLikeCard, parseCard, planCard, sliceCard, nameVariants, titleCase, mentionsAny, relationMentioned,
     cleanProse, stateBlock, speakerLabels, physicsText, agendaRows, sigWords, overlap, stringHash, approxTokens, plainHeading,
+    orderForCache,
 } from './slicer.js';
 
 const MODULE = 'cardSlicer';
@@ -23,6 +24,7 @@ const DEFAULTS = Object.freeze({
     neverSlice: '',
     aliases: '',
     steady: true, // keep each card's cut the same from turn to turn, so the prompt in front of the chat stays cacheable
+    cacheOrder: true, // lay out lorebook entries so the ones that change between turns come last (prompt caching)
 });
 
 // A card stays at a higher level (in the scene, active) this many of the player's turns after it last earned it,
@@ -36,6 +38,7 @@ const runtime = {
     synced: new Map(),
     lastReport: null,
     steady: new Map(), // world|uid -> { hash, mode, keep, matched, raisedAt } from the last turn, for this chat
+    cache: { seq: 0, seen: new Map() }, // world|uid -> { hash, since }: how long each sent entry has stayed the same, for this chat
 };
 
 function ctx() {
@@ -258,15 +261,23 @@ function keywordMatch(w, queryText, s, exclude) {
 // ---------------------------------------------------------------- main step
 
 async function onScanDone(args) {
-    try {
-        if (!args || !args.state || args.state.next !== 0) return; // only once the scan has finished
-        const s = settings();
-        if (!s.enabled) return;
-        const activated = args.activated && args.activated.entries;
-        if (!(activated instanceof Map) || activated.size === 0) return;
-        await processScan(args, activated, s);
-    } catch (err) {
-        console.error(LOG, 'failed, cards were sent whole', err);
+    if (!args || !args.state || args.state.next !== 0) return; // only once the scan has finished
+    const activated = args.activated && args.activated.entries;
+    if (!(activated instanceof Map) || activated.size === 0) return;
+    const s = settings();
+    if (s.enabled) {
+        try {
+            await processScan(args, activated, s);
+        } catch (err) {
+            console.error(LOG, 'failed, cards were sent whole', err);
+        }
+    }
+    if (s.cacheOrder) {
+        try {
+            orderForCache([...activated.values()], runtime.cache, !runtime.dryRun && runtime.genType !== 'quiet');
+        } catch (err) {
+            console.error(LOG, 'could not order the lorebook for caching; SillyTavern\'s own order was kept', err);
+        }
     }
 }
 
@@ -543,6 +554,7 @@ function settingsHtml() {
         <input id="cs_threshold" type="number" min="0" max="1" step="0.05" class="text_pole">
       </div>
       <label class="checkbox_label"><input type="checkbox" id="cs_vectors"><span>Match with Vector Storage's embedder (keywords if it can't be reached)</span></label>
+      <label class="checkbox_label" title="Always-on entries go first and entries that come and go by keyword (places, side characters) go last, with anything that just changed moved to the end of its group. A change then breaks the provider's prompt cache only from that point on, instead of from the top of the lorebook. Works even with slicing turned off."><input type="checkbox" id="cs_cacheorder"><span>Order lorebook entries for prompt caching</span></label>
       <label class="checkbox_label" title="Each card keeps last turn's cut while its level stays the same, adding only lines about newly named people, and stays at a higher level for a few turns after it last earned it. The text in front of the chat then stays the same between turns, so the provider can cache it."><input type="checkbox" id="cs_steady"><span>Keep cards steady between turns (prompt caching)</span></label>
       <label for="cs_never">Never slice these cards (one name or title per line)</label>
       <textarea id="cs_never" class="text_pole" rows="2" placeholder="Example: Jules Vaughn (this grey text is only an example)"></textarea>
@@ -566,6 +578,7 @@ function bindSettings() {
     $('#cs_voice').val(s.voiceLines).on('input', function () { s.voiceLines = Math.min(20, Math.max(0, parseInt(this.value, 10) || 0)); save(); });
     $('#cs_threshold').val(s.threshold).on('input', function () { const v = parseFloat(this.value); s.threshold = Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.4; save(); });
     $('#cs_vectors').prop('checked', !!s.useVectors).on('change', function () { s.useVectors = !!this.checked; save(); });
+    $('#cs_cacheorder').prop('checked', !!s.cacheOrder).on('change', function () { s.cacheOrder = !!this.checked; runtime.cache = { seq: 0, seen: new Map() }; save(); });
     $('#cs_steady').prop('checked', !!s.steady).on('change', function () { s.steady = !!this.checked; runtime.steady.clear(); save(); });
     $('#cs_never').val(s.neverSlice).on('input', function () { s.neverSlice = this.value; save(); });
     $('#cs_aliases').val(s.aliases).on('input', function () { s.aliases = this.value; save(); });
@@ -590,6 +603,7 @@ jQuery(() => {
     else c.eventSource.on(c.eventTypes.WORLDINFO_SCAN_DONE, onScanDone);
     c.eventSource.on(c.eventTypes.CHAT_CHANGED, () => {
         runtime.steady.clear();
+        runtime.cache = { seq: 0, seen: new Map() };
         runtime.lastReport = null;
         renderReport(null);
     });
