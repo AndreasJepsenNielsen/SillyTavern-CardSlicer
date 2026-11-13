@@ -397,3 +397,59 @@ test('linger and order together: a kept entry holds its place', () => {
     S.orderForCache([...a2.values()], ord);
     assert.deepEqual(laidOut([...a2.values()]), first, 'same entries in the same order');
 });
+
+const MASHIRO = `CANON POINT
+Portrayed at the start of term. Nothing after this has happened.
+
+IDENTITY
+Kohinata Mashiro, 20, second-year art student.
+
+SPEECH AND VOICE
+Quiet, short sentences.
+(Pleased) "Oh... thanks."
+
+RELATIONSHIPS
+
+LEON
+- Wants: him to stay.
+- Speech: quiet, short.
+
+AIKO (roommate)
+- Wants: her approval.
+- Speech: teasing.
+
+LIMITS
+Won't be filmed. (At a limit) "No... put it away."
+
+SMALL HABITS
+- Tucks her hair behind her ear.
+
+APPEARANCE
+- Oversized sweaters.
+
+BODY
+- Slim, small breasts, pale pink nipples.
+
+INTIMACY
+Quiet at first, louder once relaxed.`;
+
+test('BODY and INTIMACY: their own kinds, after RELATIONSHIPS and its entries; sent only in the scene', () => {
+    const p = S.parseCard(MASHIRO, { knownNames: KNOWN });
+    assert.deepEqual(p.sections.map(s => s.kind), ['canon', 'identity', 'speech', 'relationships', 'limits', 'habits', 'appearance', 'body', 'intimacy']);
+    assert.deepEqual(p.sections.find(s => s.kind === 'relationships').persons.map(x => x.core), ['LEON', 'AIKO']);
+    const direct = S.parseCard('IDENTITY\nX, 25.\nSPEECH AND VOICE\nFlat.\nRELATIONSHIPS\nLEON\n- Wants: x.\nAIKO\n- Wants: y.\nBODY\n- Tall.\nINTIMACY\nLoud.', { knownNames: KNOWN });
+    assert.deepEqual(direct.sections.map(s => s.kind), ['identity', 'speech', 'relationships', 'body', 'intimacy']);
+    assert.deepEqual(direct.sections.find(s => s.kind === 'relationships').persons.map(x => x.core), ['LEON', 'AIKO']);
+    const has = (mode) => {
+        const { text, stats } = slice(MASHIRO, mode, { present: mode === 'present' ? ['Leon'] : [] });
+        const action = (k) => stats.find(s => s.kind === k).action;
+        return { body: text.includes('pale pink nipples'), intimacy: text.includes('louder once relaxed'), actions: [action('body'), action('intimacy')], appearance: text.includes('Oversized sweaters') };
+    };
+    assert.deepEqual(has('present'), { body: true, intimacy: true, actions: ['kept', 'kept'], appearance: true });
+    assert.deepEqual(has('active'), { body: false, intimacy: false, actions: ['dropped', 'dropped'], appearance: true });
+    assert.deepEqual(has('offscreen'), { body: false, intimacy: false, actions: ['dropped', 'dropped'], appearance: true });
+    for (const h of ['BODY LANGUAGE', 'BODY IMAGE']) {
+        const card = `IDENTITY\nX.\nSPEECH AND VOICE\nFlat.\nPERSONALITY\nCold.\n${h}\nShown line.`;
+        assert.ok(S.sliceCard(S.parseCard(card), 'offscreen', new Set()).text.includes('Shown line.'), h);
+    }
+});

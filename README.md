@@ -30,7 +30,7 @@ Jules is active). A row that names nobody (working a shift, running errands) is 
 
 Nothing that drives a character is ever cut: Personality, Like and Want, Fear and Resent, Limits, Goals, Secrets,
 Knowledge, Inner Life, Coping, Ordinary Day, Social World and every section of the character's own (FAITH AND USING, THE GROUP CHAT) are always sent, except sex and kink
-sections, which are only sent in the scene (see below). What changes by level:
+sections and BODY, which are only sent in the scene (see below). What changes by level:
 
 **In the scene**: the whole card. History keeps its newest lines, every line naming someone whose entry is sent
 whole, and up to four more lines that match the scene.
@@ -39,8 +39,8 @@ whole, and up to four more lines that match the scene.
 entry is sent whole.
 
 **Sex and kink sections** (headings with SEX, KINK, TURN-ONS, INTIMACY, EROTIC, NSFW, FETISH or BEDROOM;
-not SEXUALITY) are only sent while the character is in the scene. The card template keeps everything from them
-that shows in everyday life under Like and Want or Fear and Resent.
+not SEXUALITY) and **BODY** (how they look bare) are only sent while the character is in the scene. The card
+template keeps everything from them that shows in everyday life under Like and Want or Fear and Resent.
 
 **Off-screen, routine or no row**: History keeps only its newest lines and lines with you (lines about other
 people come back once the character is in the scene or active), Speech and Voice keeps its description and
